@@ -1,0 +1,19 @@
+{
+  "name": "arete-gateway",
+  "version": "0.1.0",
+  "description": "Arete Gateway — local REST/SSE face for CNS/CP realm participation without embedding the SDK",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "patch": "node scripts/patch-sdk.js",
+    "postinstall": "node scripts/patch-sdk.js",
+    "test:e2e": "node test/e2e.js"
+  },
+  "dependencies": {
+    "arete-sdk": "0.1.6"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
