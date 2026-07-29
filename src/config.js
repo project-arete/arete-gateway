@@ -16,6 +16,7 @@ export function loadConfig(rootDir) {
   cfg.bind = cfg.bind ?? '127.0.0.1'; // localhost by default; network exposure is explicit opt-in
   cfg.systemName = cfg.systemName ?? 'Arete Gateway';
   cfg.realms = cfg.realms ?? {};
+  cfg.corsOrigins = cfg.corsOrigins ?? []; // browser origins allowed to call the API cross-origin
 
   cfg.dataDir = path.resolve(rootDir, cfg.dataDir ?? 'data');
   fs.mkdirSync(cfg.dataDir, { recursive: true });

@@ -1,0 +1,386 @@
+<!doctype html>
+<!-- Arete Gateway Console — dependency-free, single file, served by the
+     gateway itself at /ui (same origin, no CORS) or pointable at any remote
+     gateway base URL from Settings. The console is a viewer for the local
+     API: declarations are the only thing it writes; connections it can only
+     watch appear. That asymmetry is the architecture. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arete Gateway Console</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #0e1116; --pane: #161b23; --edge: #262d38; --ink: #d7dde6;
+    --dim: #8a94a3; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --accent: #4fa3ff; --ok: #3fca7c; --warn: #e0a63f; --err: #e0604f;
+    --provider: #b58cff; --consumer: #4fc3c8;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+           border-bottom: 1px solid var(--edge); background: var(--pane);
+           position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .02em; }
+  header h1 span { color: var(--dim); font-weight: 400; }
+  #gwurl { font-family: var(--mono); font-size: 12px; color: var(--dim); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px;
+          border: 1px solid var(--edge); border-radius: 999px; font-size: 12px;
+          font-family: var(--mono); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+  .dot.connected { background: var(--ok); } .dot.connecting { background: var(--warn); }
+  .dot.error, .dot.disconnected { background: var(--err); }
+  .spacer { flex: 1; }
+  button { background: var(--pane); color: var(--ink); border: 1px solid var(--edge);
+           border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 13px; }
+  button:hover { border-color: var(--accent); }
+  button.small { padding: 1px 8px; font-size: 12px; }
+  main { display: grid; grid-template-columns: minmax(420px, 3fr) minmax(320px, 2fr);
+         gap: 14px; padding: 14px 16px; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--pane); border: 1px solid var(--edge); border-radius: 10px;
+            padding: 12px 14px; }
+  section > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+                 color: var(--dim); margin: 0 0 10px; display: flex; align-items: center; gap: 10px; }
+  details { margin: 4px 0 4px 0; }
+  details details { margin-left: 18px; }
+  summary { cursor: pointer; padding: 3px 6px; border-radius: 6px; user-select: none; }
+  summary:hover { background: rgba(79,163,255,.08); }
+  .id { font-family: var(--mono); font-size: 13px; }
+  .name { color: var(--dim); }
+  .role { font-family: var(--mono); font-size: 11px; padding: 1px 7px; border-radius: 4px;
+          border: 1px solid; }
+  .role.provider { color: var(--provider); border-color: var(--provider); }
+  .role.consumer { color: var(--consumer); border-color: var(--consumer); }
+  .state { font-size: 11px; font-family: var(--mono); color: var(--dim); }
+  .state.pending { color: var(--warn); }
+  .props { margin: 4px 0 6px 24px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .prop { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono);
+          font-size: 12px; background: var(--bg); border: 1px solid var(--edge);
+          border-radius: 6px; padding: 2px 8px; }
+  .prop b { color: var(--accent); font-weight: 500; }
+  .prop input { width: 72px; background: var(--bg); color: var(--ink);
+                border: 1px solid var(--accent); border-radius: 4px;
+                font: inherit; padding: 0 4px; }
+  .prop .editbtn { border: none; background: none; color: var(--dim); cursor: pointer;
+                   padding: 0 2px; font-size: 12px; }
+  .prop .editbtn:hover { color: var(--accent); }
+  .conn { margin: 4px 0 4px 24px; padding: 6px 10px; background: var(--bg);
+          border: 1px solid var(--edge); border-left: 3px solid var(--ok);
+          border-radius: 6px; }
+  .conn.gone { border-left-color: var(--dim); opacity: .55; }
+  .conn .id { font-size: 12px; }
+  .flash { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: rgba(63,202,124,.25); } to { background: transparent; } }
+  #events { list-style: none; margin: 0; padding: 0; font-family: var(--mono);
+            font-size: 12px; max-height: 78vh; overflow-y: auto; }
+  #events li { padding: 4px 6px; border-bottom: 1px solid var(--edge); display: flex;
+               gap: 8px; align-items: baseline; }
+  #events .t { color: var(--dim); flex-shrink: 0; }
+  .etype { flex-shrink: 0; padding: 0 6px; border-radius: 4px; font-size: 11px; }
+  .etype.connection { background: rgba(63,202,124,.15); color: var(--ok); }
+  .etype.property { background: rgba(79,163,255,.15); color: var(--accent); }
+  .etype.realm { background: rgba(224,166,63,.15); color: var(--warn); }
+  #evfilter { background: var(--bg); border: 1px solid var(--edge); color: var(--ink);
+              border-radius: 6px; padding: 3px 8px; font: 12px var(--mono); flex: 1; }
+  .empty { color: var(--dim); font-style: italic; padding: 8px 6px; }
+  dialog { background: var(--pane); color: var(--ink); border: 1px solid var(--edge);
+           border-radius: 12px; padding: 20px 22px; min-width: 380px; }
+  dialog::backdrop { background: rgba(0,0,0,.55); }
+  dialog label { display: block; font-size: 12px; color: var(--dim); margin: 12px 0 4px; }
+  dialog input { width: 100%; background: var(--bg); color: var(--ink);
+                 border: 1px solid var(--edge); border-radius: 6px; padding: 6px 10px;
+                 font: 13px var(--mono); }
+  dialog .hint { font-size: 11px; color: var(--dim); margin-top: 4px; }
+  dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 18px 0 0; }
+  #toasts { position: fixed; bottom: 16px; right: 16px; display: flex;
+            flex-direction: column; gap: 8px; z-index: 20; max-width: 420px; }
+  .toast { background: var(--pane); border: 1px solid var(--err); border-radius: 8px;
+           padding: 8px 12px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  .toast.ok { border-color: var(--ok); }
+  .toast code { font-family: var(--mono); color: var(--warn); font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Arete Gateway <span>Console</span></h1>
+  <span id="gwurl"></span>
+  <span id="realmchips"></span>
+  <span class="spacer"></span>
+  <span class="chip" title="SSE event stream"><span class="dot" id="ssedot"></span>events</span>
+  <button id="settingsbtn">Settings</button>
+</header>
+
+<main>
+  <section>
+    <h2>Declared through this gateway
+      <span class="spacer"></span>
+      <button class="small" id="refreshbtn" title="Reload the declaration tree">Refresh</button>
+    </h2>
+    <div id="tree"><div class="empty">Connecting…</div></div>
+  </section>
+  <section>
+    <h2>Events
+      <input id="evfilter" placeholder="filter: type, realm, node, profile…">
+      <button class="small" id="pausebtn">Pause</button>
+    </h2>
+    <ol id="events"></ol>
+  </section>
+</main>
+
+<dialog id="settings">
+  <h3 style="margin:0 0 4px">Gateway</h3>
+  <label>Base URL <span class="hint" style="display:inline">(empty = this origin)</span></label>
+  <input id="s_base" placeholder="e.g. https://gw.anto.aretehosting.com" spellcheck="false">
+  <div class="hint">Remote gateways must allowlist this page's origin in <code>corsOrigins</code>.</div>
+  <label>Local API token</label>
+  <input id="s_token" placeholder="contents of data/local-token" spellcheck="false">
+  <div class="hint">Printed at first gateway start; stored only in this browser (localStorage).</div>
+  <menu>
+    <button id="s_cancel">Cancel</button>
+    <button id="s_save" style="border-color:var(--accent)">Connect</button>
+  </menu>
+</dialog>
+
+<div id="toasts"></div>
+
+<script>
+'use strict';
+const $ = (s, el = document) => el.querySelector(s);
+const store = {
+  get base() { return localStorage.getItem('agw.base') ?? ''; },
+  set base(v) { localStorage.setItem('agw.base', v); },
+  get token() { return localStorage.getItem('agw.token') ?? ''; },
+  set token(v) { localStorage.setItem('agw.token', v); },
+};
+
+// ---------- API ----------
+async function api(path, opts = {}) {
+  const res = await fetch(store.base + path, {
+    ...opts,
+    headers: { Authorization: 'Bearer ' + store.token, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) },
+  });
+  let body = null;
+  try { body = await res.json(); } catch { /* non-JSON */ }
+  if (res.status === 401) { openSettings('Token rejected — check data/local-token.'); throw body?.error ?? { code: 'unauthorized' }; }
+  if (!res.ok) throw body?.error ?? { code: 'http_' + res.status, message: res.statusText };
+  return body;
+}
+
+// ---------- status / realm chips ----------
+async function refreshStatus() {
+  try {
+    const st = await api('/v0/status');
+    $('#realmchips').innerHTML = st.realms.map((r) =>
+      `<span class="chip" title="${esc(r.host)}:${r.port}${r.lastError ? ' — ' + esc(r.lastError) : ''}">
+         <span class="dot ${r.state}"></span>${esc(r.realm)}</span>`).join(' ');
+  } catch (e) { if (e.code !== 'unauthorized') toast(errMsg('status', e)); }
+}
+
+// ---------- declaration tree ----------
+let refreshQueued = false, refreshTimer = null;
+
+function queueTreeRefresh() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => {
+    // Never blindly re-render DOM holding user state: defer while editing.
+    if ($('#tree').querySelector('input')) { refreshQueued = true; return; }
+    refreshTree();
+  }, 300);
+}
+
+async function refreshTree() {
+  refreshQueued = false;
+  try {
+    const realms = await api('/v0/realms');
+    const parts = await Promise.all(realms.map(renderRealm));
+    $('#tree').innerHTML = parts.join('') ||
+      '<div class="empty">No declarations yet. Apps create them with the four-call walkthrough (docs/local-api-v0.1.md §5).</div>';
+  } catch (e) { if (e.code !== 'unauthorized') toast(errMsg('tree', e)); }
+}
+
+async function renderRealm(r) {
+  let nodes = [];
+  try { nodes = await api(`/v0/realms/${r.realm}/nodes`); } catch { /* realm may be pending */ }
+  const inner = (await Promise.all(nodes.map((n) => renderNode(r.realm, n)))).join('');
+  return `<details open><summary><span class="dot ${r.state}" style="display:inline-block"></span>
+    <span class="id">${esc(r.realm)}</span> <span class="name">${esc(r.host)}</span></summary>
+    ${inner || '<div class="empty">no nodes declared</div>'}</details>`;
+}
+
+async function renderNode(realm, n) {
+  const ctxs = (await Promise.all((n.contexts ?? []).map(async (c) => {
+    const decls = (await Promise.all((c.declarations ?? []).map((d) => renderDecl(realm, n.node, c.context, d)))).join('');
+    return `<details open><summary><span class="id">${esc(c.context)}</span>
+      <span class="name">${esc(c.name)}</span></summary>${decls || '<div class="empty">no declarations</div>'}</details>`;
+  }))).join('');
+  return `<details open><summary><span class="id">${esc(n.node)}</span>
+    <span class="name">${esc(n.name)}</span>${n.upstream ? ' <span class="state">upstream</span>' : ''}</summary>
+    ${ctxs || '<div class="empty">no contexts</div>'}</details>`;
+}
+
+async function renderDecl(realm, node, ctx, d) {
+  const base = `/v0/realms/${realm}/nodes/${node}/contexts/${ctx}/declarations/${d.role}/${d.profile}`;
+  const props = Object.entries(d.properties ?? {}).map(([k, v]) => propChip(base, 'capability', k, v)).join('');
+  let conns = '';
+  if (d.connections > 0) {
+    try {
+      const list = await api(base + '/connections');
+      conns = list.map((c) => {
+        const cprops = Object.entries(c.properties ?? {}).map(([k, v]) =>
+          propChip(`${base}/connections/${c.conn}`, 'connection', k, v)).join('');
+        return `<div class="conn" data-conn="${esc(c.conn)}">
+          <span class="id">⇄ ${esc(c.conn)}</span> <span class="state">${esc(c.state)}</span>
+          <div class="props">${cprops}</div></div>`;
+      }).join('');
+    } catch { /* transient */ }
+  }
+  return `<details open data-decl="${esc(`${realm}/${node}/${ctx}/${d.role}/${d.profile}`)}">
+    <summary><span class="role ${d.role}">${esc(d.role)}</span>
+      <span class="id">${esc(d.profile)}</span>
+      <span class="state ${d.state}">${esc(d.state)}</span>
+      <span class="state">· ${d.connections} conn</span></summary>
+    <div class="props">${props || '<span class="empty">no properties</span>'}</div>
+    ${conns}</details>`;
+}
+
+function propChip(base, scope, key, value) {
+  return `<span class="prop" data-base="${esc(base)}" data-scope="${scope}" data-key="${esc(key)}">
+    <b>${esc(key)}</b><span class="val">${esc(String(value))}</span>
+    <button class="editbtn" title="write ${esc(key)} (${scope}-level)">✎</button></span>`;
+}
+
+// Inline property editing — writes go through the same governed endpoints as
+// any app; wrong-role and non-propagate writes come back as 422s and are shown
+// verbatim. The registry is authoritative, not this page.
+$('#tree').addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('.editbtn');
+  if (!btn) return;
+  const chip = btn.closest('.prop');
+  const val = $('.val', chip);
+  if ($('input', chip)) return;
+  const input = document.createElement('input');
+  input.value = val.textContent;
+  val.replaceWith(input);
+  btn.style.display = 'none';
+  input.focus(); input.select();
+  const done = (commit) => async () => {
+    const newVal = input.value;
+    const span = document.createElement('span');
+    span.className = 'val'; span.textContent = commit ? newVal : val.textContent;
+    input.replaceWith(span); btn.style.display = '';
+    if (commit && newVal !== val.textContent) {
+      try {
+        await api(`${chip.dataset.base}/properties/${chip.dataset.key}`, {
+          method: 'PUT', body: JSON.stringify({ value: newVal }),
+        });
+        span.classList.add('flash');
+        toast(`${chip.dataset.key} = ${newVal} (${chip.dataset.scope}-level write accepted)`, 'ok');
+      } catch (e) { span.textContent = val.textContent; toast(errMsg('write', e)); }
+    }
+    if (refreshQueued) queueTreeRefresh();
+  };
+  input.addEventListener('keydown', (k) => {
+    if (k.key === 'Enter') done(true)();
+    if (k.key === 'Escape') done(false)();
+  });
+  input.addEventListener('blur', done(false));
+});
+
+// ---------- events (SSE) ----------
+let es = null, paused = false;
+const EVENT_TYPES = ['connection.created', 'property.changed', 'realm.connected', 'realm.disconnected'];
+
+function connectSse() {
+  if (es) es.close();
+  // ?token= — EventSource cannot set an Authorization header (design doc §6.3).
+  es = new EventSource(`${store.base}/v0/events?stream=sse&token=${encodeURIComponent(store.token)}`);
+  es.onopen = () => { $('#ssedot').className = 'dot connected'; };
+  es.onerror = () => { $('#ssedot').className = 'dot error'; };
+  for (const type of EVENT_TYPES) {
+    es.addEventListener(type, (m) => handleEvent(JSON.parse(m.data)));
+  }
+}
+
+function handleEvent(evt) {
+  logEvent(evt);
+  if (evt.type.startsWith('realm.')) refreshStatus();
+  queueTreeRefresh();
+}
+
+function logEvent(evt) {
+  if (paused) return;
+  const f = $('#evfilter').value.trim().toLowerCase();
+  const hay = [evt.type, evt.realm, evt.node, evt.context, evt.role, evt.profile, evt.conn,
+               evt.data?.property, evt.data?.value].filter(Boolean).join(' ').toLowerCase();
+  if (f && !hay.includes(f)) return;
+  const li = document.createElement('li');
+  const kind = evt.type.split('.')[0];
+  const detail =
+    evt.type === 'property.changed'
+      ? `${evt.profile} ${evt.data?.property ?? ''}: ${esc(String(evt.data?.previous ?? ''))} → <b>${esc(String(evt.data?.value ?? ''))}</b> <span class="t">(${esc(evt.data?.origin ?? '')})</span>`
+      : evt.type === 'connection.created'
+        ? `${evt.role}/${evt.profile} on ${evt.node}/${evt.context} ⇄ ${esc(evt.data?.peer?.node ?? '?')}`
+        : `${esc(evt.realm)}${evt.data?.reason ? ' — ' + esc(evt.data.reason) : ''}`;
+  li.innerHTML = `<span class="t">${evt.occurredAt.slice(11, 19)}</span>
+    <span class="etype ${kind}">${esc(evt.type)}</span><span>${detail}</span>`;
+  const list = $('#events');
+  list.prepend(li);
+  while (list.children.length > 500) list.lastChild.remove();
+}
+
+$('#pausebtn').addEventListener('click', () => {
+  paused = !paused;
+  $('#pausebtn').textContent = paused ? 'Resume' : 'Pause';
+});
+
+// ---------- settings ----------
+function openSettings(msg) {
+  if ($('#settings').open) return;
+  $('#s_base').value = store.base;
+  $('#s_token').value = store.token;
+  if (msg) toast(msg);
+  $('#settings').showModal();
+}
+$('#settingsbtn').addEventListener('click', () => openSettings());
+$('#s_cancel').addEventListener('click', () => $('#settings').close());
+$('#s_save').addEventListener('click', () => {
+  store.base = $('#s_base').value.trim().replace(/\/+$/, '');
+  store.token = $('#s_token').value.trim();
+  $('#settings').close();
+  boot();
+});
+$('#refreshbtn').addEventListener('click', refreshTree);
+
+// ---------- misc ----------
+function toast(text, cls = '') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + cls;
+  el.innerHTML = text;
+  $('#toasts').append(el);
+  setTimeout(() => el.remove(), cls === 'ok' ? 3500 : 8000);
+}
+function errMsg(what, e) {
+  return `${what}: <code>${esc(e.code ?? 'error')}</code> ${esc(e.message ?? '')}`;
+}
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+// ---------- boot ----------
+function boot() {
+  $('#gwurl').textContent = store.base || location.origin;
+  if (!store.token) { openSettings(); return; }
+  refreshStatus();
+  refreshTree();
+  connectSse();
+}
+setInterval(refreshStatus, 10000);
+boot();
+</script>
+</body>
+</html>

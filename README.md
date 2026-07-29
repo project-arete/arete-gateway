@@ -43,6 +43,23 @@ curl -N -H "$H" "$B/events?stream=sse&realm=test"     # connection.created, prop
 Connections then *appear* — they are never created by the app. Write back with
 `PUT …/declarations/consumer/padi.light/properties/cState -d '{"value":"1"}'`.
 
+## Console
+
+The gateway serves its own live view at **http://localhost:8420/ui** — a
+dependency-free single page (`ui/index.html`, no build step) showing realm
+connectivity, the declaration tree with live properties, connections as they
+materialize, and the SSE event tail. Own-side properties are editable inline;
+writes go through the same governed endpoints as any app, so wrong-role and
+non-propagated writes surface as the API's 422s verbatim. The page is served
+unauthenticated (it holds no secrets); every API call it makes needs the local
+token, which it asks for on first load and keeps in browser localStorage.
+
+The console can also point at a *remote* gateway (Settings → Base URL). For
+that, the remote gateway must allowlist the page's origin in `corsOrigins`
+(config.json; default empty = no cross-origin browser access). The SSE stream
+accepts `?token=` because EventSource cannot set an Authorization header —
+see docs/placement-naming-draft.md for the placement/browser-client story.
+
 ## Field-truth behaviors baked in
 
 These come from live-verified SDK/realm behavior (see ARETE.md gotchas):

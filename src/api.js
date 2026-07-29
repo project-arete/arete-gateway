@@ -93,6 +93,15 @@ export function createApi({ cfg, store, manager, hub, registry }) {
       }
 
       // ---- nodes tree ----
+      if (segs[2] === 'nodes' && segs.length === 3 && method === 'GET') {
+        // List all nodes declared through this gateway (console/introspection).
+        const tree = store.getTree(realmName);
+        return sendJson(
+          res,
+          200,
+          Object.entries(tree.nodes).map(([id, n]) => describeNode(realm, realmName, id, n)),
+        );
+      }
       if (segs[2] === 'nodes') {
         return handleNodes({ req, res, method, segs, realmName, realm, store, registry });
       }

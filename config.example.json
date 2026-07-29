@@ -2,6 +2,7 @@
   "port": 8420,
   "bind": "127.0.0.1",
   "systemName": "Arete Gateway",
+  "corsOrigins": [],
   "localToken": "change-me-or-delete-this-line-to-autogenerate",
   "realms": {
     "test": {
