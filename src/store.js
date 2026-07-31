@@ -82,6 +82,25 @@ export class Store {
     return this.getContext(realm, node, ctx)?.declarations?.[`${role}/${profile}`];
   }
 
+  deleteDeclaration(realm, node, ctx, role, profile) {
+    const c = this.getContext(realm, node, ctx);
+    if (!c) return;
+    delete c.declarations[`${role}/${profile}`];
+    this.save();
+  }
+
+  deleteContext(realm, node, ctx) {
+    const n = this.getNode(realm, node);
+    if (!n) return;
+    delete n.contexts[ctx];
+    this.save();
+  }
+
+  deleteNode(realm, node) {
+    delete this.getTree(realm).nodes[node];
+    this.save();
+  }
+
   putDeclaration(realm, node, ctx, role, profile, body) {
     const c = this.getContext(realm, node, ctx);
     c.declarations[`${role}/${profile}`] = {

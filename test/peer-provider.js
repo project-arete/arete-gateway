@@ -15,7 +15,11 @@ if (!host || !ctxId) {
 const NODE_ID = 'gw-e2e-peer';
 const PROFILE = 'padi.light';
 
-const client = new Client({ protocol: 'wss:', host, port: 443 });
+const client = new Client({
+  protocol: process.env.E2E_PROTOCOL ?? 'wss:',
+  host,
+  port: Number(process.env.E2E_PORT ?? 443),
+});
 // Arm the first-message waiter BEFORE waitForOpen: the SDK emits 'open' on the
 // first MESSAGE, which can arrive while waitForOpen is still polling.
 const snapshot = new Promise((resolve, reject) => {
@@ -70,10 +74,29 @@ const seeStart = Date.now();
 while (Date.now() - seeStart < 30000) {
   if (client.get(cKey) === '1') {
     console.log('PEER SAW cState=1');
-    client.dispose();
-    process.exit(0);
+
+    // Stay bound so the driver can inspect the live connection, then retract
+    // on request so test runs stop leaving permanent participants behind.
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', async (chunk) => {
+      if (!String(chunk).includes('RETRACT')) return;
+      try {
+        await client.command('purge', `cns/${system.id}/nodes/${NODE_ID}`);
+        console.log('PEER RETRACTED');
+      } catch (e) {
+        console.log('PEER RETRACT FAILED: ' + e.message);
+      }
+      client.dispose();
+      process.exit(0);
+    });
+    process.stdin.resume();
+    break;
   }
   await new Promise((r) => setTimeout(r, 300));
 }
-console.log('PEER TIMEOUT waiting for cState');
-process.exit(1);
+// Reached only if the loop ran out without ever seeing cState (the success
+// path breaks out and waits on stdin for RETRACT).
+if (client.get(cKey) !== '1') {
+  console.log('PEER TIMEOUT waiting for cState');
+  process.exit(1);
+}

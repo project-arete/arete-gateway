@@ -134,6 +134,16 @@ export function createApi({ cfg, store, manager, hub, registry }) {
         if (!node) throw notFound(`no node '${nodeId}' declared through this gateway`);
         return sendJson(res, 200, describeNode(realm, realmName, nodeId, node));
       }
+      if (method === 'DELETE') {
+        if (!store.getNode(realmName, nodeId)) throw notFound(`no node '${nodeId}'`);
+        realm.requireClient();
+        const prefix = await realm.retractNode(nodeId);
+        store.deleteNode(realmName, nodeId);
+        return sendJson(res, 200, {
+          realm: realmName, node: nodeId, retracted: true, prefix,
+          note: 'node and everything beneath it removed; the substrate severs affected connections',
+        });
+      }
       throw methodNotAllowed(method);
     }
 
@@ -163,6 +173,16 @@ export function createApi({ cfg, store, manager, hub, registry }) {
         if (!ctx) throw notFound(`no context '${ctxId}' declared through this gateway`);
         return sendJson(res, 200, describeContext(realm, realmName, nodeId, ctxId, ctx));
       }
+      if (method === 'DELETE') {
+        if (!store.getContext(realmName, nodeId, ctxId)) throw notFound(`no context '${ctxId}'`);
+        realm.requireClient();
+        const prefix = await realm.retractContext(nodeId, ctxId);
+        store.deleteContext(realmName, nodeId, ctxId);
+        return sendJson(res, 200, {
+          realm: realmName, node: nodeId, context: ctxId, retracted: true, prefix,
+          note: 'context and its declarations removed; the substrate severs affected connections',
+        });
+      }
       throw methodNotAllowed(method);
     }
 
@@ -183,14 +203,21 @@ export function createApi({ cfg, store, manager, hub, registry }) {
         return sendJson(res, 200, describeDeclaration(realm, realmName, nodeId, ctxId, role, profile, decl));
       }
       if (method === 'DELETE') {
-        // Deliberate divergence from the v0.1 doc: retraction is not
-        // implementable today — SDK v0.1.6 has no delete command and the CNS
-        // wire has no key delete (put-null writes a literal "null").
-        throw new ApiError(
-          501,
-          'retraction_not_supported',
-          'capability retraction needs wire-level delete support, which the realm does not provide yet; the declaration remains until realm-side tooling can remove it',
-        );
+        // Retraction — the app's half of the lifecycle. The substrate severs
+        // any resulting connections; we never delete a connection ourselves.
+        realm.requireClient();
+        const prefix = await realm.retractDeclaration(nodeId, ctxId, role, profile);
+        store.deleteDeclaration(realmName, nodeId, ctxId, role, profile);
+        return sendJson(res, 200, {
+          realm: realmName,
+          node: nodeId,
+          context: ctxId,
+          role,
+          profile,
+          retracted: true,
+          prefix,
+          note: 'declaration removed; the substrate severs any connections that depended on it',
+        });
       }
       throw methodNotAllowed(method);
     }

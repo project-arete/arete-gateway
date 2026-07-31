@@ -14,6 +14,10 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REALM_HOST = process.env.E2E_REALM ?? 'test.aretehosting.com';
+// Overridable so the suite can run against a local realm (etcd + cns-cli +
+// orchestrator) instead of a shared one — see cns-cli/test/run-socket-security.sh.
+const REALM_PROTOCOL = process.env.E2E_PROTOCOL ?? 'wss:';
+const REALM_PORT = Number(process.env.E2E_PORT ?? 443);
 const PORT = 8437;
 const TOKEN = 'e2e-local-token';
 const BASE = `http://127.0.0.1:${PORT}/v0`;
@@ -59,7 +63,7 @@ fs.writeFileSync(
     localToken: TOKEN,
     systemName: 'Arete Gateway E2E',
     dataDir: `data-e2e-${RUN}`,
-    realms: { test: { protocol: 'wss:', host: REALM_HOST, port: 443 } },
+    realms: { test: { protocol: REALM_PROTOCOL, host: REALM_HOST, port: REALM_PORT } },
   }),
 );
 // loadConfig reads config.json from root — use a scratch root via env
@@ -172,13 +176,19 @@ try {
   res = await api('PUT', `${declPath}/properties/sOut`, { value: '1' });
   check('writing the peer role\'s property -> 422', res.status === 422, `status ${res.status}`);
 
-  res = await api('DELETE', declPath);
-  check('DELETE declaration -> 501 (no wire delete)', res.status === 501, `status ${res.status}`);
+  // Retraction round-trip: declare a throwaway capability, retract it, confirm
+  // it is gone. (The main declaration is retracted in teardown, after bind.)
+  const tmpDecl = `/realms/test/nodes/${NODE}/contexts/${CTX}/declarations/provider/padi.light`;
+  await api('PUT', tmpDecl, {});
+  res = await api('DELETE', tmpDecl);
+  check('DELETE declaration -> retracted', res.status === 200, `status ${res.status}`);
+  res = await api('GET', tmpDecl);
+  check('retracted declaration is gone -> 404', res.status === 404, `status ${res.status}`);
 
   // ---------- bind: spawn the peer provider ----------
   const peer = spawn('node', [path.join(root, 'test', 'peer-provider.js'), REALM_HOST, CTX], {
     env: { ...process.env, ARETE_SYSTEM_ID: crypto.randomUUID() },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
   children.push(peer);
   const peerLines = [];
@@ -250,6 +260,29 @@ try {
   check('realm describe never echoes token', !('token' in realmInfo), Object.keys(realmInfo).join(','));
 
   sseAbort.abort();
+
+  // ---------- teardown: retract what this run declared ----------
+  // Without this every e2e run left a permanent participant on the realm.
+  // Retraction is scoped to the gateway's own subtree; the peer cleans up its
+  // own on exit. The substrate severs the connection as a consequence.
+  try {
+    // Ask the peer to retract its own subtree (it cannot be reached by ours).
+    peer.stdin.write('RETRACT\n');
+    await waitFor(
+      'peer retracts its own subtree',
+      async () => peerLines.some((l) => l.includes('PEER RETRACTED')),
+      8000,
+    );
+
+    const del = await api('DELETE', `/realms/test/nodes/${NODE}`);
+    check('teardown: node retracted', del.status === 200, `status ${del.status}`);
+
+    await new Promise((r) => setTimeout(r, 1500));
+    const gone = await api('GET', `/realms/test/nodes/${NODE}`);
+    check('teardown: node is gone', gone.status === 404, `status ${gone.status}`);
+  } catch (e) {
+    check('teardown: node retracted', false, e.message);
+  }
 
   // ---------- summary ----------
   const failed = results.filter((r) => !r.ok);

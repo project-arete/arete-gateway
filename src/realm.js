@@ -251,6 +251,37 @@ export class RealmConnection {
     await c.put(`${this.capPrefix(node, ctx, role, profile)}/properties/${prop}`, String(value));
   }
 
+  /**
+   * Retract a declaration: remove its subtree from the realm. The substrate
+   * severs any connections that depended on it — the gateway never deletes a
+   * connection itself.
+   *
+   * Scoped to this gateway's OWN system subtree by construction (capPrefix),
+   * which is the rule the wire does not yet enforce for us.
+   */
+  async retractDeclaration(node, ctx, role, profile) {
+    const c = this.requireClient();
+    const prefix = this.capPrefix(node, ctx, role, profile);
+    await c.command('purge', prefix);
+    return prefix;
+  }
+
+  /** Retract a whole context (all declarations beneath it). */
+  async retractContext(node, ctx) {
+    const c = this.requireClient();
+    const prefix = `cns/${this.systemId}/nodes/${node}/contexts/${ctx}`;
+    await c.command('purge', prefix);
+    return prefix;
+  }
+
+  /** Retract a whole node. */
+  async retractNode(node) {
+    const c = this.requireClient();
+    const prefix = `cns/${this.systemId}/nodes/${node}`;
+    await c.command('purge', prefix);
+    return prefix;
+  }
+
   async putConnectionProperty(node, ctx, role, profile, conn, prop, value) {
     const c = this.requireClient();
     await c.put(
@@ -370,6 +401,28 @@ export class RealmConnection {
         conn: connId,
         data: { peer: this.#peerOf(node, ctx, role, profile, connId) },
       });
+    }
+
+    // Connection removal is observable now that retraction exists: the
+    // substrate severs, and the deletion arrives as a null-valued key. Emit
+    // once, when the last key of the connection goes away.
+    if (value === null && set.has(connId)) {
+      const prefix = `${this.capPrefix(node, ctx, role, profile)}/connections/${connId}/`;
+      const remaining = Object.keys(this.keys()).some(
+        (k) => k.startsWith(prefix) && this.keys()[k] !== null,
+      );
+      if (!remaining) {
+        set.delete(connId);
+        this.hub.emit('connection.deleted', {
+          realm: this.name,
+          node,
+          context: ctx,
+          role,
+          profile,
+          conn: connId,
+          data: { reason: 'severed' },
+        });
+      }
     }
 
     if (!initialScan && rest && rest.startsWith('properties/') && value !== null) {
