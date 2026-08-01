@@ -21,6 +21,8 @@ const BACKOFF_START = 5000;
 const BACKOFF_MAX = 60000;
 const BACKOFF_MAX_UNAUTHORIZED = 300000;
 
+const CONN_PEER_GRACE_MS = 1500;
+
 export class RealmConnection {
   constructor(name, cfg, { store, hub, registry, systemName, log }) {
     this.name = name;
@@ -39,6 +41,7 @@ export class RealmConnection {
 
     this.prevKeys = {};
     this.knownConns = new Map(); // capKey -> Set(connId)
+    this.pendingConns = new Map(); // capKey|connId -> timer, awaiting peer
     this.backoff = BACKOFF_START;
     this._stopped = false;
     this._retryTimer = null;
@@ -391,16 +394,12 @@ export class RealmConnection {
     if (!set) this.knownConns.set(capKey, (set = new Set()));
 
     if (value !== null && !set.has(connId)) {
-      set.add(connId);
-      this.hub.emit('connection.created', {
-        realm: this.name,
-        node,
-        context: ctx,
-        role,
-        profile,
-        conn: connId,
-        data: { peer: this.#peerOf(node, ctx, role, profile, connId) },
-      });
+      // A connection's keys do not all arrive in one delta: the properties
+      // often land before the attribute naming the peer. Emitting on the very
+      // first key therefore reports peer: null for connections whose peer we
+      // are about to learn. So hold the event briefly — until the peer is
+      // known, or a short grace period expires — and emit once, complete.
+      this.#scheduleConnectionCreated(node, ctx, role, profile, connId, set, capKey);
     }
 
     // Connection removal is observable now that retraction exists: the
@@ -446,15 +445,115 @@ export class RealmConnection {
     }
   }
 
-  #peerOf(node, ctx, role, profile, connId) {
-    // Best-effort peer identification: another system declaring the
-    // complementary role for the same profile in the same context.
-    const other = role === 'provider' ? 'consumer' : 'provider';
-    for (const p of this.listParticipants(ctx)) {
-      if (!p.self && p.role === other && p.profile === profile) {
-        return { system: p.system, node: p.node, role: p.role };
-      }
+  /**
+   * Emit connection.created once the peer is known, or after a short grace
+   * period if it never becomes known. Fires at most once per connection.
+   */
+  #scheduleConnectionCreated(node, ctx, role, profile, connId, set, capKey) {
+    
+    const pendKey = `${capKey}|${connId}`;
+    // Only the substrate's own attribute short-circuits the wait. An
+    // unambiguous guess is not worth emitting early for: it lacks the peer's
+    // context and names, and waiting a moment usually yields the real thing.
+    const known = this.#peerFromRecord(node, ctx, role, profile, connId);
+
+    if (this.pendingConns.has(pendKey)) {
+      if (!known) return;
+      clearTimeout(this.pendingConns.get(pendKey));
+      this.pendingConns.delete(pendKey);
+      this.#fireConnectionCreated(node, ctx, role, profile, connId, set, known);
+      return;
     }
+
+    if (known) {
+      this.#fireConnectionCreated(node, ctx, role, profile, connId, set, known);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      this.pendingConns.delete(pendKey);
+      if (set.has(connId)) return;
+      this.#fireConnectionCreated(
+        node, ctx, role, profile, connId, set,
+        this.#peerOf(node, ctx, role, profile, connId));
+    }, CONN_PEER_GRACE_MS);
+    if (timer.unref) timer.unref();
+    this.pendingConns.set(pendKey, timer);
+  }
+
+  #fireConnectionCreated(node, ctx, role, profile, connId, set, peer) {
+    if (set.has(connId)) return;
+    set.add(connId);
+    this.hub.emit('connection.created', {
+      realm: this.name,
+      node,
+      context: ctx,
+      role,
+      profile,
+      conn: connId,
+      data: { peer },
+    });
+  }
+
+  /**
+   * Who is on the other end of this connection.
+   *
+   * The substrate tells us directly: alongside the connection's properties it
+   * writes an attribute named for the OPPOSITE role, holding the peer's
+   * namespace —
+   *
+   *   …/consumer/padi.light/connections/<id>/provider
+   *     = "cns/<system>/nodes/<node>/contexts/<ctx>"
+   *
+   * This used to be inferred instead, by scanning the context for anyone
+   * declaring the complementary role and taking the first match. That is a
+   * guess, and with more than two participants in a context it is frequently
+   * the WRONG one — which then travelled out in connection.created and every
+   * webhook built on it. Read the fact; keep the guess only for the window
+   * before the attribute has arrived.
+   */
+  #peerOf(node, ctx, role, profile, connId) {
+    return this.#peerFromRecord(node, ctx, role, profile, connId)
+      ?? this.#guessPeer(ctx, role, profile);
+  }
+
+  /** The authoritative answer, or null if the substrate has not said yet. */
+  #peerFromRecord(node, ctx, role, profile, connId) {
+    const other = role === 'provider' ? 'consumer' : 'provider';
+
+    const ns = this.keys()[
+      `${this.capPrefix(node, ctx, role, profile)}/connections/${connId}/${other}`
+    ];
+
+    if (typeof ns === 'string' && ns.startsWith('cns/')) {
+      // cns/<system>/nodes/<node>/contexts/<context>
+      const p = ns.split('/');
+      const peer = { system: p[1], node: p[3], context: p[5], role: other };
+
+      // Names are a convenience, and only available if the peer's tree is
+      // visible to us — so include them when we can and never depend on them.
+      const sysName = this.keys()[`cns/${p[1]}/name`];
+      const nodeName = this.keys()[`cns/${p[1]}/nodes/${p[3]}/name`];
+      if (sysName !== undefined) peer.systemName = sysName;
+      if (nodeName !== undefined) peer.name = nodeName;
+
+      return peer;
+    }
+
     return null;
+  }
+
+  /** Fallback only: used before the substrate's own attribute has arrived. */
+  #guessPeer(ctx, role, profile) {
+    const other = role === 'provider' ? 'consumer' : 'provider';
+    const candidates = this.listParticipants(ctx)
+      .filter((p) => !p.self && p.role === other && p.profile === profile);
+
+    // Ambiguous is worse than unknown: naming one of several possible peers
+    // reads as fact downstream. Only answer when there is exactly one.
+    if (candidates.length !== 1) return null;
+
+    const p = candidates[0];
+    return { system: p.system, node: p.node, role: p.role, inferred: true };
   }
 }

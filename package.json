@@ -10,7 +10,8 @@
     "postinstall": "node scripts/patch-sdk.js",
     "test:e2e": "node test/e2e.js",
     "test:webhooks": "node test/webhooks.js",
-    "test:capabilities": "node test/capabilities.js"
+    "test:capabilities": "node test/capabilities.js",
+    "test:peers": "node test/peer-identity.js"
   },
   "dependencies": {
     "arete-sdk": "0.1.6"
