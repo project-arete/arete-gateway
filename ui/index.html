@@ -40,6 +40,30 @@
   main { display: grid; grid-template-columns: minmax(420px, 3fr) minmax(320px, 2fr);
          gap: 14px; padding: 14px 16px; align-items: start; }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .rail { display: flex; flex-direction: column; gap: 14px; }
+  .checks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .checks label { display: inline-flex; align-items: center; gap: 5px; margin: 0;
+                  font-family: var(--mono); font-size: 12px; color: var(--ink);
+                  background: var(--bg); border: 1px solid var(--edge);
+                  border-radius: 6px; padding: 3px 8px; cursor: pointer; }
+  .checks input { width: auto; }
+  dialog select, dialog textarea { width: 100%; background: var(--bg); color: var(--ink);
+                 border: 1px solid var(--edge); border-radius: 6px; padding: 6px 10px;
+                 font: 13px var(--mono); }
+  dialog textarea { resize: vertical; word-break: break-all; }
+  .hook { background: var(--bg); border: 1px solid var(--edge); border-radius: 8px;
+          padding: 8px 10px; margin-bottom: 8px; }
+  .hook .id { font-size: 13px; }
+  .hook .url { color: var(--dim); font-family: var(--mono); font-size: 11px;
+               word-break: break-all; }
+  .hook .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .stat { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+  .stat b { color: var(--ok); font-weight: 500; }
+  .stat b.bad { color: var(--err); }
+  .cap { margin: 4px 0 0 24px; display: flex; align-items: center; gap: 8px;
+         flex-wrap: wrap; font-family: var(--mono); font-size: 11px; color: var(--dim); }
+  .cap .pill { background: var(--bg); border: 1px solid var(--edge); border-radius: 6px;
+               padding: 1px 7px; }
   section { background: var(--pane); border: 1px solid var(--edge); border-radius: 10px;
             padding: 12px 14px; }
   section > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
@@ -122,14 +146,70 @@
     </h2>
     <div id="tree"><div class="empty">Connecting…</div></div>
   </section>
-  <section>
-    <h2>Events
-      <input id="evfilter" placeholder="filter: type, realm, node, profile…">
-      <button class="small" id="pausebtn">Pause</button>
-    </h2>
-    <ol id="events"></ol>
-  </section>
+  <div class="rail">
+    <section>
+      <h2>Webhooks
+        <span class="spacer"></span>
+        <button class="small" id="hookaddbtn" title="Register a webhook">+ Add</button>
+      </h2>
+      <div id="hooks"><div class="empty">none registered</div></div>
+    </section>
+    <section>
+      <h2>Events
+        <input id="evfilter" placeholder="filter: type, realm, node, profile…">
+        <button class="small" id="pausebtn">Pause</button>
+      </h2>
+      <ol id="events"></ol>
+    </section>
+  </div>
 </main>
+
+<dialog id="hookdlg">
+  <h3 style="margin:0 0 4px">Register a webhook</h3>
+  <label>Hook id</label>
+  <input id="h_id" placeholder="my-hook" spellcheck="false">
+  <label>URL</label>
+  <input id="h_url" placeholder="http://127.0.0.1:9000/arete" spellcheck="false">
+  <label>Secret <span class="hint" style="display:inline">(optional — signs deliveries)</span></label>
+  <input id="h_secret" placeholder="whsec_…" spellcheck="false">
+  <div class="hint">Stored, never shown again. Deliveries carry <code>X-Arete-Signature</code>.</div>
+  <label>Events <span class="hint" style="display:inline">(none selected = all)</span></label>
+  <div id="h_events" class="checks"></div>
+  <menu>
+    <button id="h_cancel">Cancel</button>
+    <button id="h_save" style="border-color:var(--accent)">Register</button>
+  </menu>
+</dialog>
+
+<dialog id="capdlg">
+  <h3 style="margin:0 0 4px">Mint a capability</h3>
+  <div class="hint" id="cap_for"></div>
+  <label>Properties <span class="hint" style="display:inline">(this connection's, own side only)</span></label>
+  <div id="cap_props" class="checks"></div>
+  <label>Direction</label>
+  <select id="cap_dir">
+    <option value="write">write</option>
+    <option value="read">read</option>
+    <option value="readwrite">read + write</option>
+  </select>
+  <label>Label <span class="hint" style="display:inline">(optional, for your own reference)</span></label>
+  <input id="cap_label" placeholder="wall switch" spellcheck="false">
+  <menu>
+    <button id="cap_cancel">Cancel</button>
+    <button id="cap_save" style="border-color:var(--accent)">Mint</button>
+  </menu>
+</dialog>
+
+<dialog id="tokendlg">
+  <h3 style="margin:0 0 4px">Capability token</h3>
+  <div class="hint">Shown once. Only its hash is stored — it cannot be recovered.</div>
+  <textarea id="tok_value" readonly rows="3"></textarea>
+  <div class="hint" id="tok_scope"></div>
+  <menu>
+    <button id="tok_copy">Copy</button>
+    <button id="tok_close" style="border-color:var(--accent)">Done</button>
+  </menu>
+</dialog>
 
 <dialog id="settings">
   <h3 style="margin:0 0 4px">Gateway</h3>
@@ -229,12 +309,32 @@ async function renderDecl(realm, node, ctx, d) {
   if (d.connections > 0) {
     try {
       const list = await api(base + '/connections');
-      conns = list.map((c) => {
+      // Capabilities are per connection; fetch them alongside.
+      const caps = await Promise.all(list.map((c) =>
+        api(`${base}/connections/${c.conn}/capabilities`).catch(() => [])));
+
+      conns = list.map((c, i) => {
+        const connBase = `${base}/connections/${c.conn}`;
         const cprops = Object.entries(c.properties ?? {}).map(([k, v]) =>
-          propChip(`${base}/connections/${c.conn}`, 'connection', k, v)).join('');
+          propChip(connBase, 'connection', k, v)).join('');
+        const propNames = Object.keys(c.properties ?? {});
+        const peer = c.attributes?.provider ?? c.attributes?.consumer;
+        const capList = (caps[i] ?? []).map((cap) =>
+          `<span class="pill">${esc(cap.direction)} ${esc(cap.properties.join(','))}` +
+          `${cap.label ? ' · ' + esc(cap.label) : ''} · used ${cap.uses}</span>` +
+          `<button class="small" data-cap-revoke="${esc(cap.capId)}" ` +
+          `data-cap-base="${esc(connBase)}" title="Revoke">✕</button>`).join('');
+
         return `<div class="conn" data-conn="${esc(c.conn)}">
           <span class="id">⇄ ${esc(c.conn)}</span> <span class="state">${esc(c.state)}</span>
-          <div class="props">${cprops}</div></div>`;
+          ${peer ? `<span class="state">· peer ${esc(String(peer).split('/')[1]?.slice(0, 8) ?? '')}</span>` : ''}
+          <div class="props">${cprops}</div>
+          <div class="cap">
+            <button class="small" data-cap-mint="${esc(c.conn)}" data-cap-base="${esc(connBase)}"
+              data-cap-props="${esc(JSON.stringify(propNames))}"
+              title="Mint a device token scoped to this connection">+ capability</button>
+            ${capList}
+          </div></div>`;
       }).join('');
     } catch { /* transient */ }
   }
@@ -290,8 +390,127 @@ $('#tree').addEventListener('click', async (ev) => {
   input.addEventListener('blur', done(false));
 });
 
+// ---------- webhooks ----------
+const EVENT_CHOICES = ['connection.created', 'connection.deleted', 'property.changed',
+                       'realm.connected', 'realm.disconnected'];
+
+async function refreshHooks() {
+  try {
+    const hooks = await api('/v0/webhooks');
+    $('#hooks').innerHTML = hooks.length ? hooks.map(hookRow).join('')
+      : '<div class="empty">none registered</div>';
+  } catch (e) { if (e.code !== 'unauthorized') toast(errMsg('webhooks', e)); }
+}
+
+function hookRow(h) {
+  const failed = h.failed ? `<b class="bad">${h.failed} failed</b>` : '';
+  const queued = h.queued ? ` · ${h.queued} queued` : '';
+  const err = h.lastError ? ` · <span title="${esc(h.lastError)}">last: ${esc(String(h.lastError).slice(0, 40))}</span>` : '';
+  return `<div class="hook" data-hook="${esc(h.hook)}">
+    <div class="row"><span class="id">${esc(h.hook)}</span>
+      ${h.hasSecret ? '<span class="stat">signed</span>' : '<span class="stat">unsigned</span>'}
+      <span class="spacer"></span>
+      <button class="small" data-hook-test="${esc(h.hook)}">Test</button>
+      <button class="small" data-hook-del="${esc(h.hook)}">Remove</button></div>
+    <div class="url">${esc(h.url)}</div>
+    <div class="stat"><b>${h.delivered || 0} delivered</b> ${failed}${queued}${err}</div>
+    <div class="stat">${h.events ? h.events.map(esc).join(' · ') : 'all events'}</div>
+  </div>`;
+}
+
+$('#hooks').addEventListener('click', async (ev) => {
+  const t = ev.target.closest('[data-hook-test]');
+  const d = ev.target.closest('[data-hook-del]');
+  try {
+    if (t) {
+      await api(`/v0/webhooks/${t.dataset.hookTest}/test`, { method: 'POST' });
+      toast('test event queued — watch your endpoint', 'ok');
+      setTimeout(refreshHooks, 1200);
+    } else if (d) {
+      await api(`/v0/webhooks/${d.dataset.hookDel}`, { method: 'DELETE' });
+      refreshHooks();
+    }
+  } catch (e) { toast(errMsg('webhook', e)); }
+});
+
+$('#hookaddbtn').addEventListener('click', () => {
+  $('#h_id').value = ''; $('#h_url').value = ''; $('#h_secret').value = '';
+  $('#h_events').innerHTML = EVENT_CHOICES.map((e) =>
+    `<label><input type="checkbox" value="${e}">${e}</label>`).join('');
+  $('#hookdlg').showModal();
+});
+$('#h_cancel').addEventListener('click', () => $('#hookdlg').close());
+$('#h_save').addEventListener('click', async () => {
+  const id = $('#h_id').value.trim();
+  const url = $('#h_url').value.trim();
+  if (!id || !url) { toast('hook id and URL are required'); return; }
+  const events = [...$('#h_events').querySelectorAll('input:checked')].map((i) => i.value);
+  const body = { url };
+  if ($('#h_secret').value.trim()) body.secret = $('#h_secret').value.trim();
+  if (events.length) body.events = events;
+  try {
+    await api(`/v0/webhooks/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+    $('#hookdlg').close();
+    refreshHooks();
+    toast(`webhook ${esc(id)} registered`, 'ok');
+  } catch (e) { toast(errMsg('register', e)); }
+});
+
+// ---------- capabilities ----------
+let capContext = null;   // { base, conn, properties }
+
+$('#tree').addEventListener('click', async (ev) => {
+  const mint = ev.target.closest('[data-cap-mint]');
+  const revoke = ev.target.closest('[data-cap-revoke]');
+
+  if (revoke) {
+    try {
+      await api(`${revoke.dataset.capBase}/capabilities/${revoke.dataset.capRevoke}`, { method: 'DELETE' });
+      toast('capability revoked', 'ok');
+      queueTreeRefresh();
+    } catch (e) { toast(errMsg('revoke', e)); }
+    return;
+  }
+  if (!mint) return;
+
+  capContext = { base: mint.dataset.capBase, conn: mint.dataset.capMint,
+                 properties: JSON.parse(mint.dataset.capProps || '[]') };
+  $('#cap_for').textContent = `connection ${capContext.conn}`;
+  $('#cap_props').innerHTML = capContext.properties.length
+    ? capContext.properties.map((p) => `<label><input type="checkbox" value="${esc(p)}">${esc(p)}</label>`).join('')
+    : '<span class="empty">this connection has no properties yet</span>';
+  $('#cap_label').value = '';
+  $('#cap_dir').value = 'write';
+  $('#capdlg').showModal();
+});
+
+$('#cap_cancel').addEventListener('click', () => $('#capdlg').close());
+$('#cap_save').addEventListener('click', async () => {
+  const props = [...$('#cap_props').querySelectorAll('input:checked')].map((i) => i.value);
+  if (!props.length) { toast('choose at least one property'); return; }
+  try {
+    const r = await api(`${capContext.base}/capabilities`, {
+      method: 'POST',
+      body: JSON.stringify({ properties: props, direction: $('#cap_dir').value,
+                             label: $('#cap_label').value.trim() }),
+    });
+    $('#capdlg').close();
+    $('#tok_value').value = r.token;
+    $('#tok_scope').textContent =
+      `${r.direction} · ${r.properties.join(', ')} · connection ${r.conn}`;
+    $('#tokendlg').showModal();
+    queueTreeRefresh();
+  } catch (e) { toast(errMsg('mint', e)); }
+});
+$('#tok_copy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('#tok_value').value); toast('copied', 'ok'); }
+  catch { $('#tok_value').select(); }
+});
+$('#tok_close').addEventListener('click', () => $('#tokendlg').close());
+
 // ---------- events (SSE) ----------
 let es = null, paused = false;
+let hookRefreshTimer = null;
 const EVENT_TYPES = ['connection.created', 'property.changed', 'realm.connected', 'realm.disconnected'];
 
 function connectSse() {
@@ -308,6 +527,10 @@ function connectSse() {
 function handleEvent(evt) {
   logEvent(evt);
   if (evt.type.startsWith('realm.')) refreshStatus();
+  // Delivery counters move as events flow; keep them honest without polling.
+  if (hookRefreshTimer === null) {
+    hookRefreshTimer = setTimeout(() => { hookRefreshTimer = null; refreshHooks(); }, 1500);
+  }
   queueTreeRefresh();
 }
 
@@ -377,6 +600,7 @@ function boot() {
   if (!store.token) { openSettings(); return; }
   refreshStatus();
   refreshTree();
+  refreshHooks();
   connectSse();
 }
 setInterval(refreshStatus, 10000);
