@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Arete Gateway — API Reference</title>
+  <!-- Swagger UI loaded from CDN (pinned) so the repo stays dependency-free.
+       This page needs internet access; the curl + console paths do not. -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui.min.css">
+  <style>
+    body { margin: 0; }
+    .topbar { display: none; }
+    .gw-note {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 14px; color: #3d4a59; background: #f5f8fc;
+      border-bottom: 1px solid #e3e9f1; padding: 10px 20px;
+    }
+    .gw-note code { background: #fff; border: 1px solid #e3e9f1; border-radius: 4px; padding: 1px 5px; }
+  </style>
+</head>
+<body>
+  <div class="gw-note">
+    <strong>Arete Gateway API.</strong> Click <em>Authorize</em> and paste the local
+    API token (<code>data/local-token</code>, or <code>localToken</code> in config.json).
+    Live state view: <a href="/ui">console</a> &middot; machine-readable spec:
+    <a href="/v0/openapi.json">/v0/openapi.json</a>
+  </div>
+  <div id="swagger-ui"></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui-bundle.min.js"></script>
+  <script>
+    window.ui = SwaggerUIBundle({
+      url: '/v0/openapi.json',
+      dom_id: '#swagger-ui',
+      persistAuthorization: true,
+      tryItOutEnabled: true,
+      displayRequestDuration: true,
+      defaultModelsExpandDepth: 0,
+      docExpansion: 'list',
+      tagsSorter: 'alpha',
+    });
+  </script>
+</body>
+</html>

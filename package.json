@@ -9,6 +9,7 @@
     "patch": "node scripts/patch-sdk.js",
     "postinstall": "node scripts/patch-sdk.js",
     "test:e2e": "node test/e2e.js",
+    "test:openapi": "node test/openapi.js",
     "test:webhooks": "node test/webhooks.js",
     "test:capabilities": "node test/capabilities.js",
     "test:peers": "node test/peer-identity.js",

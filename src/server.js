@@ -32,6 +32,8 @@ const webhooks = new WebhookManager({
 const api = createApi({ cfg, store, manager, hub, registry, webhooks, capabilities });
 
 const uiFile = path.join(root, 'ui', 'index.html');
+const docsFile = path.join(root, 'ui', 'docs.html');
+const specFile = path.join(root, 'docs', 'openapi.json');
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
@@ -46,6 +48,23 @@ const server = http.createServer(async (req, res) => {
         return res.end();
       }
       const html = fs.readFileSync(uiFile);
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': html.length });
+      return res.end(html);
+    }
+
+    // API reference — both unauthenticated: the spec is the public contract
+    // and holds no secrets; the Swagger UI page takes the token via Authorize.
+    if (req.method === 'GET' && url.pathname === '/v0/openapi.json') {
+      const spec = fs.readFileSync(specFile);
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Content-Length': spec.length,
+        'Access-Control-Allow-Origin': '*', // let external spec viewers load it
+      });
+      return res.end(spec);
+    }
+    if (req.method === 'GET' && (url.pathname === '/docs' || url.pathname === '/docs/')) {
+      const html = fs.readFileSync(docsFile);
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': html.length });
       return res.end(html);
     }

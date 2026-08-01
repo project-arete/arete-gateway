@@ -1,0 +1,3633 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Arete Gateway — Local Service API",
+    "version": "0.1.0",
+    "description": "Local REST/SSE face for CNS/CP realm participation. Apps declare capabilities, observe governed connections, and exchange properties over plain HTTP — no SDK embedded.\n\nThe architecture is carried into the API shape: **declarations are writable; connections are read-only.** The app performs Declare; the substrate performs Reconcile, Match, Bind. Connections appear — they are never created by the app. To leave, DELETE (retract) a declaration, context or node; the substrate severs anything that depended on it.\n\nAll writes are PUT with client-chosen ids and idempotent under retry (identical re-PUT = 200 no-op). Two POSTs exist, both server-named creations: capability minting and webhook test delivery.\n\nCompanion surfaces (not part of this contract): `/ui` — the live console; `/docs` — this spec rendered interactively. Architecture background: ARETE.md.",
+    "license": {
+      "name": "See repository",
+      "url": "https://github.com/project-arete/arete-gateway"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8420",
+      "description": "Local gateway (port configurable; localhost scope in v0.1)"
+    }
+  ],
+  "security": [
+    {
+      "localToken": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "status",
+      "description": "Gateway + realm connectivity"
+    },
+    {
+      "name": "realms",
+      "description": "Realm attachment (usually config-file; API-available)"
+    },
+    {
+      "name": "declarations",
+      "description": "The app's write surface: nodes, contexts, capability declarations"
+    },
+    {
+      "name": "properties",
+      "description": "The data plane — capability-level (broadcast) and per-connection (addressed) writes"
+    },
+    {
+      "name": "connections",
+      "description": "Read-only — the substrate's output"
+    },
+    {
+      "name": "introspection",
+      "description": "Live realm state, as far as governance grants this gateway visibility"
+    },
+    {
+      "name": "events",
+      "description": "SSE stream of the event catalogue"
+    },
+    {
+      "name": "webhooks",
+      "description": "Signed, ordered, at-least-once event delivery"
+    },
+    {
+      "name": "capabilities",
+      "description": "Narrow device credentials minted on one connection"
+    }
+  ],
+  "paths": {
+    "/v0/status": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Gateway + realm connectivity",
+        "operationId": "getStatus",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/events": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "summary": "Recent events (JSON) or live stream (SSE)",
+        "operationId": "getEvents",
+        "description": "With `stream=sse`, returns `text/event-stream` carrying Event envelopes; resume with the `Last-Event-ID` header. `?token=` is accepted here only (EventSource cannot set headers). Without `stream`, returns the most recent buffered events.",
+        "parameters": [
+          {
+            "name": "stream",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "sse"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "maximum": 1000
+            }
+          },
+          {
+            "name": "realm",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter events by realm."
+          },
+          {
+            "name": "node",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter events by node."
+          },
+          {
+            "name": "context",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter events by context."
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter events by role."
+          },
+          {
+            "name": "profile",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter events by profile."
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter events by type."
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Local token via query — SSE only."
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "SSE resume point."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent events, or an SSE stream.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Event"
+                      }
+                    }
+                  }
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms": {
+      "get": {
+        "tags": [
+          "realms"
+        ],
+        "summary": "List realms",
+        "operationId": "listRealms",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Realm"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "put": {
+        "tags": [
+          "realms"
+        ],
+        "summary": "Attach a realm",
+        "operationId": "attachRealm",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RealmAttach"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Attached (idempotent re-PUT reconnects with the new settings).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Realm"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request (missing/invalid fields, bad id syntax).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`duplicate_realm_host`: another handle already connects to this host (one system identity — double registration refused). On DELETE: `config_realm` — config-declared realms are removed via config.json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "realms"
+        ],
+        "summary": "Describe a realm",
+        "operationId": "getRealm",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Realm"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "realms"
+        ],
+        "summary": "Detach a realm (local only)",
+        "operationId": "detachRealm",
+        "description": "Stops this gateway talking to the realm. Does NOT retract what was declared there — retract the nodes first if that is what you meant.",
+        "responses": {
+          "200": {
+            "description": "Detached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "realm": {
+                      "type": "string"
+                    },
+                    "detached": {
+                      "type": "boolean"
+                    },
+                    "note": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`duplicate_realm_host`: another handle already connects to this host (one system identity — double registration refused). On DELETE: `config_realm` — config-declared realms are removed via config.json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}/systems": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "introspection"
+        ],
+        "summary": "Systems visible in the realm",
+        "operationId": "listSystems",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SystemInfo"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}/contexts": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "introspection"
+        ],
+        "summary": "Contexts visible to this gateway",
+        "operationId": "listContexts",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ContextInfo"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}/contexts/{ctx}/participants": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "ctx",
+          "in": "path",
+          "required": true,
+          "description": "Context id. Matching is by id across systems; the name is only a label.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "introspection"
+        ],
+        "summary": "Who is declared in a context, by role/profile",
+        "operationId": "listParticipants",
+        "description": "Visibility is whatever the realm's governance grants this gateway — the API exposes it, never expands it.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Participant"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}/nodes": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "declarations"
+        ],
+        "summary": "Nodes declared through this gateway",
+        "operationId": "listNodes",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Node"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}/nodes/{node}": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "node",
+          "in": "path",
+          "required": true,
+          "description": "The app's node id (client-chosen, stable).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "put": {
+        "tags": [
+          "declarations"
+        ],
+        "summary": "Register a node",
+        "operationId": "putNode",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Registered on the wire.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Node"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Realm offline — persisted, will replay on reconnect.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Node"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request (missing/invalid fields, bad id syntax).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "declarations"
+        ],
+        "summary": "Introspect a node subtree",
+        "operationId": "getNode",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Node"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "declarations"
+        ],
+        "summary": "Retract a node and everything beneath it",
+        "operationId": "deleteNode",
+        "responses": {
+          "200": {
+            "description": "Retracted; the substrate severs affected connections.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Retraction"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}/nodes/{node}/contexts/{ctx}": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "node",
+          "in": "path",
+          "required": true,
+          "description": "The app's node id (client-chosen, stable).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "ctx",
+          "in": "path",
+          "required": true,
+          "description": "Context id. Matching is by id across systems; the name is only a label.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "put": {
+        "tags": [
+          "declarations"
+        ],
+        "summary": "Register a context",
+        "operationId": "putContext",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NameBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Registered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Context"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Realm offline — persisted, will replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Context"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request (missing/invalid fields, bad id syntax).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "declarations"
+        ],
+        "summary": "Introspect a context",
+        "operationId": "getContext",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Context"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "declarations"
+        ],
+        "summary": "Retract a context and its declarations",
+        "operationId": "deleteContext",
+        "responses": {
+          "200": {
+            "description": "Retracted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Retraction"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}/nodes/{node}/contexts/{ctx}/declarations/{role}/{profile}": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "node",
+          "in": "path",
+          "required": true,
+          "description": "The app's node id (client-chosen, stable).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "ctx",
+          "in": "path",
+          "required": true,
+          "description": "Context id. Matching is by id across systems; the name is only a label.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "role",
+          "in": "path",
+          "required": true,
+          "description": "CP-connection role.",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "provider",
+              "consumer"
+            ]
+          }
+        },
+        {
+          "name": "profile",
+          "in": "path",
+          "required": true,
+          "description": "Connection Profile name in runtime form (e.g. padi.light — no prefix). Must resolve at cp.padi.io.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "put": {
+        "tags": [
+          "declarations"
+        ],
+        "summary": "Declare a capability (provider or consumer of a CP)",
+        "operationId": "putDeclaration",
+        "description": "The profile is resolved from the CP registry before acceptance — an unregistered profile would silently never bind, so it is refused (422). Identical redeclaration is a 200 no-op; the wire declaration is never re-issued for an existing capability (value-wiper protection).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeclarationBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Identical redeclaration — no-op.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Declaration"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Declared on the wire.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Declaration"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Realm offline — persisted, will replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Declaration"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request (missing/invalid fields, bad id syntax).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Same id, different body. Identical redeclaration is a 200 no-op; to change values use the properties endpoints.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`unknown_profile` (not in the CP registry — would silently never bind), `unknown_property`, or `wrong_role_property` (that property is written by the peer role).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "cp.padi.io could not be reached and no cached copy of the profile exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "declarations"
+        ],
+        "summary": "Introspect a declaration",
+        "operationId": "getDeclaration",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Declaration"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "declarations"
+        ],
+        "summary": "Retract a declaration",
+        "operationId": "deleteDeclaration",
+        "description": "The substrate severs any connections that depended on it — connections are no more deleted by the app than they were created by it.",
+        "responses": {
+          "200": {
+            "description": "Retracted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Retraction"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}/nodes/{node}/contexts/{ctx}/declarations/{role}/{profile}/properties": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "node",
+          "in": "path",
+          "required": true,
+          "description": "The app's node id (client-chosen, stable).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "ctx",
+          "in": "path",
+          "required": true,
+          "description": "Context id. Matching is by id across systems; the name is only a label.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "role",
+          "in": "path",
+          "required": true,
+          "description": "CP-connection role.",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "provider",
+              "consumer"
+            ]
+          }
+        },
+        {
+          "name": "profile",
+          "in": "path",
+          "required": true,
+          "description": "Connection Profile name in runtime form (e.g. padi.light — no prefix). Must resolve at cp.padi.io.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "properties"
+        ],
+        "summary": "Capability-level property values",
+        "operationId": "getProperties",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyMap"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}/nodes/{node}/contexts/{ctx}/declarations/{role}/{profile}/properties/{prop}": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "node",
+          "in": "path",
+          "required": true,
+          "description": "The app's node id (client-chosen, stable).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "ctx",
+          "in": "path",
+          "required": true,
+          "description": "Context id. Matching is by id across systems; the name is only a label.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "role",
+          "in": "path",
+          "required": true,
+          "description": "CP-connection role.",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "provider",
+              "consumer"
+            ]
+          }
+        },
+        {
+          "name": "profile",
+          "in": "path",
+          "required": true,
+          "description": "Connection Profile name in runtime form (e.g. padi.light — no prefix). Must resolve at cp.padi.io.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "prop",
+          "in": "path",
+          "required": true,
+          "description": "Property name as defined by the CP.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "put": {
+        "tags": [
+          "properties"
+        ],
+        "summary": "Write a property at capability level (broadcast)",
+        "operationId": "putProperty",
+        "description": "Fans out to all bound connections — which on the wire is only true for propagate-flagged properties, so the flag is required here (422 not_propagated otherwise; use the per-connection endpoint for addressed writes).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "Property values are strings on the wire."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyWrite"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request (missing/invalid fields, bad id syntax).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`unknown_profile`, `unknown_property`, `wrong_role_property`, or `not_propagated` (no propagate flag — a capability-level write would not broadcast; use the per-connection endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "cp.padi.io could not be reached and no cached copy of the profile exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "properties"
+        ],
+        "summary": "Read one capability-level property",
+        "operationId": "getProperty",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyValue"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}/nodes/{node}/contexts/{ctx}/declarations/{role}/{profile}/connections": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "node",
+          "in": "path",
+          "required": true,
+          "description": "The app's node id (client-chosen, stable).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "ctx",
+          "in": "path",
+          "required": true,
+          "description": "Context id. Matching is by id across systems; the name is only a label.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "role",
+          "in": "path",
+          "required": true,
+          "description": "CP-connection role.",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "provider",
+              "consumer"
+            ]
+          }
+        },
+        {
+          "name": "profile",
+          "in": "path",
+          "required": true,
+          "description": "Connection Profile name in runtime form (e.g. padi.light — no prefix). Must resolve at cp.padi.io.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "connections"
+        ],
+        "summary": "Bound connections of this declaration",
+        "operationId": "listConnections",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Connection"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}/nodes/{node}/contexts/{ctx}/declarations/{role}/{profile}/connections/{conn}": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "node",
+          "in": "path",
+          "required": true,
+          "description": "The app's node id (client-chosen, stable).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "ctx",
+          "in": "path",
+          "required": true,
+          "description": "Context id. Matching is by id across systems; the name is only a label.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "role",
+          "in": "path",
+          "required": true,
+          "description": "CP-connection role.",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "provider",
+              "consumer"
+            ]
+          }
+        },
+        {
+          "name": "profile",
+          "in": "path",
+          "required": true,
+          "description": "Connection Profile name in runtime form (e.g. padi.light — no prefix). Must resolve at cp.padi.io.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "conn",
+          "in": "path",
+          "required": true,
+          "description": "Connection id. Connections are read-only resources that appear via Match/Bind.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "connections"
+        ],
+        "summary": "One connection, with merged properties",
+        "operationId": "getConnection",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}/nodes/{node}/contexts/{ctx}/declarations/{role}/{profile}/connections/{conn}/properties": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "node",
+          "in": "path",
+          "required": true,
+          "description": "The app's node id (client-chosen, stable).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "ctx",
+          "in": "path",
+          "required": true,
+          "description": "Context id. Matching is by id across systems; the name is only a label.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "role",
+          "in": "path",
+          "required": true,
+          "description": "CP-connection role.",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "provider",
+              "consumer"
+            ]
+          }
+        },
+        {
+          "name": "profile",
+          "in": "path",
+          "required": true,
+          "description": "Connection Profile name in runtime form (e.g. padi.light — no prefix). Must resolve at cp.padi.io.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "conn",
+          "in": "path",
+          "required": true,
+          "description": "Connection id. Connections are read-only resources that appear via Match/Bind.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "properties"
+        ],
+        "summary": "Merged view: both sides' current values",
+        "operationId": "getConnectionProperties",
+        "description": "With a capability token: only the properties the capability names — never the merged view.",
+        "security": [
+          {
+            "localToken": []
+          },
+          {
+            "capabilityToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyMap"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Returned to capability-token requests outside their scope: a capability authorises exactly one connection and its named properties; every other route fails closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The connection this capability refers to no longer exists — the substrate severed it. This is what makes capability revocation free.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}/nodes/{node}/contexts/{ctx}/declarations/{role}/{profile}/connections/{conn}/properties/{prop}": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "node",
+          "in": "path",
+          "required": true,
+          "description": "The app's node id (client-chosen, stable).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "ctx",
+          "in": "path",
+          "required": true,
+          "description": "Context id. Matching is by id across systems; the name is only a label.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "role",
+          "in": "path",
+          "required": true,
+          "description": "CP-connection role.",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "provider",
+              "consumer"
+            ]
+          }
+        },
+        {
+          "name": "profile",
+          "in": "path",
+          "required": true,
+          "description": "Connection Profile name in runtime form (e.g. padi.light — no prefix). Must resolve at cp.padi.io.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "conn",
+          "in": "path",
+          "required": true,
+          "description": "Connection id. Connections are read-only resources that appear via Match/Bind.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "prop",
+          "in": "path",
+          "required": true,
+          "description": "Property name as defined by the CP.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "put": {
+        "tags": [
+          "properties"
+        ],
+        "summary": "Addressed write into one connection",
+        "operationId": "putConnectionProperty",
+        "description": "Targets one binding only; the propagate flag is not required on this channel. Own-side properties only. Devices use this same endpoint with a capability token.",
+        "security": [
+          {
+            "localToken": []
+          },
+          {
+            "capabilityToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "Property values are strings on the wire."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyWrite"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request (missing/invalid fields, bad id syntax).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Returned to capability-token requests outside their scope: a capability authorises exactly one connection and its named properties; every other route fails closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The connection this capability refers to no longer exists — the substrate severed it. This is what makes capability revocation free.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`unknown_profile`, `unknown_property`, or `wrong_role_property`. propagate is NOT required on the addressed (per-connection) channel.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "cp.padi.io could not be reached and no cached copy of the profile exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "properties"
+        ],
+        "summary": "Read one property on one connection",
+        "operationId": "getConnectionProperty",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyValue"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}/nodes/{node}/contexts/{ctx}/declarations/{role}/{profile}/connections/{conn}/capabilities": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "node",
+          "in": "path",
+          "required": true,
+          "description": "The app's node id (client-chosen, stable).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "ctx",
+          "in": "path",
+          "required": true,
+          "description": "Context id. Matching is by id across systems; the name is only a label.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "role",
+          "in": "path",
+          "required": true,
+          "description": "CP-connection role.",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "provider",
+              "consumer"
+            ]
+          }
+        },
+        {
+          "name": "profile",
+          "in": "path",
+          "required": true,
+          "description": "Connection Profile name in runtime form (e.g. padi.light — no prefix). Must resolve at cp.padi.io.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "conn",
+          "in": "path",
+          "required": true,
+          "description": "Connection id. Connections are read-only resources that appear via Match/Bind.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "capabilities"
+        ],
+        "summary": "Mint a device capability on this connection",
+        "operationId": "mintCapability",
+        "description": "Attenuating (may only name properties the gateway itself may write here — checked at mint), narrow (that connection's properties endpoints only), hashed (token shown once), self-expiring (dies with the binding).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapabilityBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Minted — the token appears ONCE in this response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityMinted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request (missing/invalid fields, bad id syntax).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`unknown_profile`, `unknown_property`, or `wrong_role_property`. propagate is NOT required on the addressed (per-connection) channel.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "cp.padi.io could not be reached and no cached copy of the profile exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "capabilities"
+        ],
+        "summary": "List capabilities on this connection",
+        "operationId": "listCapabilities",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Capability"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/realms/{realm}/nodes/{node}/contexts/{ctx}/declarations/{role}/{profile}/connections/{conn}/capabilities/{capId}": {
+      "parameters": [
+        {
+          "name": "realm",
+          "in": "path",
+          "required": true,
+          "description": "Realm handle (config-declared or API-attached).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "node",
+          "in": "path",
+          "required": true,
+          "description": "The app's node id (client-chosen, stable).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "ctx",
+          "in": "path",
+          "required": true,
+          "description": "Context id. Matching is by id across systems; the name is only a label.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "role",
+          "in": "path",
+          "required": true,
+          "description": "CP-connection role.",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "provider",
+              "consumer"
+            ]
+          }
+        },
+        {
+          "name": "profile",
+          "in": "path",
+          "required": true,
+          "description": "Connection Profile name in runtime form (e.g. padi.light — no prefix). Must resolve at cp.padi.io.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "conn",
+          "in": "path",
+          "required": true,
+          "description": "Connection id. Connections are read-only resources that appear via Match/Bind.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        },
+        {
+          "name": "capId",
+          "in": "path",
+          "required": true,
+          "description": "Capability id (server-assigned at mint).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "delete": {
+        "tags": [
+          "capabilities"
+        ],
+        "summary": "Revoke a capability",
+        "operationId": "revokeCapability",
+        "responses": {
+          "200": {
+            "description": "Revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "capId": {
+                      "type": "string"
+                    },
+                    "revoked": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realm session is not connected. Declaration-tree PUTs are instead persisted and answered 202; property writes fail with this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/webhooks": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "List webhook registrations",
+        "operationId": "listWebhooks",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Webhook"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/webhooks/{hook}": {
+      "parameters": [
+        {
+          "name": "hook",
+          "in": "path",
+          "required": true,
+          "description": "Webhook registration id (client-chosen).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "put": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Register or update a webhook",
+        "operationId": "putWebhook",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Registered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhook"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request (missing/invalid fields, bad id syntax).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "One or more event types are not in the catalogue — refused at registration, not at delivery.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Describe a webhook (delivery stats included; secret never echoed)",
+        "operationId": "getWebhook",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhook"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Remove a webhook",
+        "operationId": "deleteWebhook",
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "hook": {
+                      "type": "string"
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/webhooks/{hook}/test": {
+      "parameters": [
+        {
+          "name": "hook",
+          "in": "path",
+          "required": true,
+          "description": "Webhook registration id (client-chosen).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Queue a synthetic webhook.test delivery",
+        "operationId": "testWebhook",
+        "description": "Deliberately bypasses the hook's filter — it is a connectivity check for the whole delivery path, signature included.",
+        "responses": {
+          "202": {
+            "description": "Queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "hook": {
+                      "type": "string"
+                    },
+                    "queued": {
+                      "type": "boolean"
+                    },
+                    "note": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource does not exist (realm not attached, node/context/declaration not declared through this gateway, connection or webhook unknown).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/openapi.json": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "This document",
+        "operationId": "getOpenApi",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The OpenAPI 3.1 description of this gateway.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {
+    "eventDelivery": {
+      "post": {
+        "summary": "Event delivery to a registered webhook URL",
+        "description": "One event per delivery. Strict per-hook ordering: a failed delivery is retried (exponential backoff, up to 24h) before anything after it. At-least-once — dedupe on `eventId`. The request body is signed: `X-Arete-Signature` is the hex HMAC-SHA256 of the exact body bytes using the hook's secret. `webhook.test` events (from POST /v0/webhooks/{hook}/test) bypass the hook's filter by design.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Event"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Arete-Signature",
+            "in": "header",
+            "required": false,
+            "description": "hex(HMAC-SHA256(secret, body)) — present when the hook has a secret.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Any 2xx acknowledges delivery; anything else (or a timeout) triggers retry."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "localToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The gateway's local API token (data/local-token or config.localToken). Full access. For SSE, `?token=` is accepted on GET /v0/events only, because EventSource cannot set headers."
+      },
+      "capabilityToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "acap_…",
+        "description": "A minted device credential: exactly one connection, named properties, one direction. Valid ONLY on that connection's properties endpoints; every other route returns 403 capability_scope. Dies with the binding (410)."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "Status": {
+        "type": "object",
+        "properties": {
+          "gateway": {
+            "type": "string",
+            "const": "arete-gateway"
+          },
+          "version": {
+            "type": "string"
+          },
+          "uptimeSec": {
+            "type": "integer"
+          },
+          "realms": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Realm"
+            }
+          }
+        }
+      },
+      "Realm": {
+        "type": "object",
+        "description": "The realm token is write-only: accepted in the PUT body, never echoed (hasToken only).",
+        "properties": {
+          "realm": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "connecting",
+              "connected",
+              "error",
+              "detached"
+            ]
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "config",
+              "api"
+            ]
+          },
+          "systemId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hasToken": {
+            "type": "boolean"
+          },
+          "insecureTls": {
+            "type": "boolean"
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RealmAttach": {
+        "type": "object",
+        "required": [
+          "host"
+        ],
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "default": 443
+          },
+          "protocol": {
+            "type": "string",
+            "default": "wss:"
+          },
+          "token": {
+            "type": "string",
+            "description": "Realm Bearer token. Stored by the gateway, never echoed."
+          },
+          "insecureTls": {
+            "type": "boolean",
+            "description": "Per-realm, per-socket TLS relaxation for self-signed realms. Never process-wide."
+          }
+        }
+      },
+      "Node": {
+        "type": "object",
+        "properties": {
+          "realm": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "upstream": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "registered",
+              "pending"
+            ]
+          },
+          "contexts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Context"
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "NodeBody": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "upstream": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "Context": {
+        "type": "object",
+        "properties": {
+          "realm": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "registered",
+              "pending"
+            ]
+          },
+          "declarations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Declaration"
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "NameBody": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "Declaration": {
+        "type": "object",
+        "properties": {
+          "realm": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "provider",
+              "consumer"
+            ]
+          },
+          "profile": {
+            "type": "string"
+          },
+          "declaredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "declared",
+              "pending"
+            ]
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "connections": {
+            "type": "integer"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "DeclarationBody": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Optional initial values — only applied on a FRESH declaration (replay never re-writes them: value-wiper protection). Each property must belong to this role per the CP's server flag."
+          }
+        }
+      },
+      "Retraction": {
+        "type": "object",
+        "properties": {
+          "realm": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "retracted": {
+            "type": "boolean"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "Connection": {
+        "type": "object",
+        "description": "Read-only. Appears via Match/Bind; disappears when a side retracts. `properties` is the merged view — both sides' current values.",
+        "properties": {
+          "conn": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "const": "bound"
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "attributes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "PropertyWrite": {
+        "type": "object",
+        "properties": {
+          "property": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "capability",
+              "connection"
+            ]
+          },
+          "conn": {
+            "type": "string"
+          },
+          "via": {
+            "type": "string",
+            "const": "capability"
+          }
+        }
+      },
+      "PropertyValue": {
+        "type": "object",
+        "properties": {
+          "property": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "PropertyMap": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "SystemInfo": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "self": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ContextInfo": {
+        "type": "object",
+        "properties": {
+          "context": {
+            "type": "string"
+          },
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "system": {
+                  "type": "string"
+                },
+                "node": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Participant": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "provider",
+              "consumer"
+            ]
+          },
+          "profile": {
+            "type": "string"
+          },
+          "self": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "description": "The event envelope, identical over SSE and webhooks.",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "description": "Carries a boot epoch — a Last-Event-ID from a previous gateway process degrades to full-buffer replay, never a silent gap."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "connection.created",
+              "connection.deleted",
+              "property.changed",
+              "realm.connected",
+              "realm.disconnected",
+              "webhook.test"
+            ]
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "realm": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "conn": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "description": "For property.changed: { property, value, previous, origin: \"peer\"|\"self\"|\"unknown\" }. For connection.created: { peer }.",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "eventId",
+          "type",
+          "occurredAt"
+        ]
+      },
+      "Webhook": {
+        "type": "object",
+        "description": "The secret is stored but never echoed (hasSecret only).",
+        "properties": {
+          "hook": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "events": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "filter": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "hasSecret": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "queued": {
+            "type": "integer"
+          },
+          "delivered": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "dropped": {
+            "type": "integer"
+          }
+        }
+      },
+      "WebhookBody": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "http(s) callback URL."
+          },
+          "secret": {
+            "type": "string",
+            "description": "HMAC-SHA256 key for X-Arete-Signature."
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "connection.created",
+                "connection.deleted",
+                "property.changed",
+                "realm.connected",
+                "realm.disconnected",
+                "webhook.test"
+              ]
+            },
+            "description": "Omit for all types. Unknown types are refused at registration (422)."
+          },
+          "filter": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Optional narrowing by realm/node/context/role/profile."
+          }
+        }
+      },
+      "Capability": {
+        "type": "object",
+        "description": "Public record — the token itself is returned once at mint and only its hash is stored.",
+        "properties": {
+          "capId": {
+            "type": "string"
+          },
+          "realm": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "conn": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "readwrite"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastUsedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "uses": {
+            "type": "integer"
+          }
+        }
+      },
+      "CapabilityBody": {
+        "type": "object",
+        "required": [
+          "properties"
+        ],
+        "properties": {
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Attenuating: may only name properties the gateway itself may write on this side (checked at mint against CP flags)."
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "readwrite"
+            ],
+            "default": "write"
+          },
+          "label": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "CapabilityMinted": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Capability"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "token": {
+                "type": "string"
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "token"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

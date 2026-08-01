@@ -64,8 +64,26 @@ that, the remote gateway must allowlist the page's origin in `corsOrigins`
 accepts `?token=` because EventSource cannot set an Authorization header —
 see docs/placement-naming-draft.md for the placement/browser-client story.
 
-It has not kept pace with the API: webhooks and capabilities are not shown, so
-those two surfaces are currently curl-only. Next job on the console.
+The console shows the full surface: the declaration tree, connections,
+webhooks with delivery stats, and per-connection capabilities.
+
+## API reference (OpenAPI)
+
+The API is described by **`docs/openapi.json`** (OpenAPI 3.1) — including the
+webhook delivery contract (envelope + `X-Arete-Signature`) via the spec's
+`webhooks` section, and both credential kinds as separate security schemes.
+The gateway serves it at **`GET /v0/openapi.json`** (unauthenticated — it is
+the public contract and holds no secrets), and renders it interactively at
+**http://localhost:8420/docs** — Swagger UI loaded from a pinned CDN, so the
+repo stays dependency-free; `/docs` needs internet access, curl and the
+console do not. Click *Authorize* and paste the local token to use
+"Try it out".
+
+Generate a client, import into Postman, or hand the spec URL to an AI
+assistant alongside ARETE.md. `npm run test:openapi` keeps the spec honest:
+every documented operation must be routed and answer only documented
+statuses, and the served spec must be byte-identical to the file. When the
+API changes, change the spec in the same commit — the test fails otherwise.
 
 ## Field-truth behaviors baked in
 
