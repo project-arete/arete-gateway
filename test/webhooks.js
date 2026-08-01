@@ -20,6 +20,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { testSystemId, testSystemSeed, retractSystems } from './identities.js';
+
+// Stable ids per suite: re-running reuses these instead of minting new systems.
+let peerIndex = 0;
+const usedSystemIds = [];
+function recordId(id) { usedSystemIds.push(id); return id; }
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REALM_HOST = process.env.E2E_REALM ?? 'test.aretehosting.com';
@@ -40,8 +46,24 @@ const check = (label, ok, detail) => {
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-webhook-'));
 const children = [];
-function cleanup(code) {
+async function cleanup(code) {
+  // Ask the gateway for its own system id before killing it, so we can remove
+  // the system record too — retracting only the node leaves cns/<id>/name etc
+  // behind, one per run, which is how the test realm filled up with 24 dead
+  // systems in a day.
+  try {
+    const st = await (await api('GET', '/status')).json();
+    for (const r of st.realms ?? []) if (r.systemId) usedSystemIds.push(r.systemId);
+  } catch { /* gateway already gone */ }
+
   for (const c of children) { try { c.kill('SIGTERM'); } catch { /* gone */ } }
+
+  try {
+    await retractSystems(usedSystemIds, {
+      host: REALM_HOST, protocol: REALM_PROTOCOL, port: REALM_PORT,
+    });
+  } catch { /* best effort */ }
+
   setTimeout(() => {
     try { fs.rmSync(scratch, { recursive: true, force: true }); } catch { /* best effort */ }
     process.exit(code);
@@ -104,7 +126,7 @@ try {
   }));
 
   const gw = spawn('node', [path.join(root, 'src', 'server.js')], {
-    env: { ...process.env, ARETE_GATEWAY_ROOT: scratch },
+    env: { ...process.env, ARETE_GATEWAY_ROOT: scratch, ARETE_SYSTEM_SEED: testSystemSeed('webhooks') },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   children.push(gw);
@@ -207,7 +229,7 @@ try {
     { properties: { cState: '0' } });
 
   const peer = spawn('node', [path.join(root, 'test', 'peer-provider.js'), REALM_HOST, CTX], {
-    env: { ...process.env, ARETE_SYSTEM_ID: crypto.randomUUID() },
+    env: { ...process.env, ARETE_SYSTEM_ID: recordId(testSystemId('webhooks', 'peer', peerIndex++)) },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   children.push(peer);
@@ -260,4 +282,4 @@ try {
 const failed = results.filter((r) => !r.ok);
 console.log(`\n=== webhooks: ${results.length - failed.length}/${results.length} passed ===`);
 receiver.close();
-cleanup(failed.length ? 1 : 0);
+await cleanup(failed.length ? 1 : 0);

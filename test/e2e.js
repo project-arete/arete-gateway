@@ -11,6 +11,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { testSystemId, testSystemSeed, retractSystems } from './identities.js';
+
+// Stable ids per suite: re-running reuses these instead of minting new systems.
+let peerIndex = 0;
+const usedSystemIds = [];
+function recordId(id) { usedSystemIds.push(id); return id; }
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REALM_HOST = process.env.E2E_REALM ?? 'test.aretehosting.com';
@@ -72,7 +78,14 @@ fs.mkdirSync(scratchRoot, { recursive: true });
 fs.renameSync(path.join(root, `config-e2e-${RUN}.json`), path.join(scratchRoot, 'config.json'));
 
 const children = [];
-function cleanup(code) {
+async function cleanup(code) {
+  // Remove the system records too, not just the nodes: retracting only the
+  // node leaves cns/<id>/name|token|orchestrator behind, one set per run.
+  try {
+    const st = await (await api('GET', '/status')).json();
+    for (const r of st.realms ?? []) if (r.systemId) usedSystemIds.push(r.systemId);
+  } catch { /* gateway already gone */ }
+
   for (const c of children) {
     try {
       c.kill('SIGTERM');
@@ -80,6 +93,13 @@ function cleanup(code) {
       /* already gone */
     }
   }
+
+  try {
+    await retractSystems(usedSystemIds, {
+      host: REALM_HOST, protocol: REALM_PROTOCOL, port: REALM_PORT,
+    });
+  } catch { /* best effort */ }
+
   setTimeout(() => {
     try {
       fs.rmSync(scratchRoot, { recursive: true, force: true });
@@ -97,7 +117,7 @@ try {
     env: {
       ...process.env,
       ARETE_GATEWAY_ROOT: scratchRoot,
-      ARETE_SYSTEM_SEED: `gw-e2e-${RUN}`,
+      ARETE_SYSTEM_SEED: testSystemSeed('e2e'),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -187,7 +207,7 @@ try {
 
   // ---------- bind: spawn the peer provider ----------
   const peer = spawn('node', [path.join(root, 'test', 'peer-provider.js'), REALM_HOST, CTX], {
-    env: { ...process.env, ARETE_SYSTEM_ID: crypto.randomUUID() },
+    env: { ...process.env, ARETE_SYSTEM_ID: recordId(testSystemId('e2e', 'peer', peerIndex++)) },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   children.push(peer);
@@ -287,10 +307,10 @@ try {
   // ---------- summary ----------
   const failed = results.filter((r) => !r.ok);
   console.log(`\n=== E2E: ${results.length - failed.length}/${results.length} passed ===`);
-  cleanup(failed.length ? 1 : 0);
+  await cleanup(failed.length ? 1 : 0);
 } catch (err) {
   console.error('E2E ABORT:', err.message);
   const failed = results.filter((r) => !r.ok);
   console.log(`\n=== E2E: ${results.length - failed.length}/${results.length} passed (aborted) ===`);
-  cleanup(1);
+  await cleanup(1);
 }
