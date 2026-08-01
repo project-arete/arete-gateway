@@ -1,7 +1,8 @@
 // HTTP API — the system-side face. Routes follow the v0.1 design doc with the
-// wire-truth corrections listed in README.md (501 on DELETE declaration,
-// propagate-flag enforcement, registry validation of profiles, no
-// connection.deleted event).
+// wire-truth corrections listed in README.md: propagate-flag enforcement on
+// declaration-level writes, registry validation of profiles at declaration
+// time, and no connection.updated. Beyond the doc: retraction (DELETE),
+// webhook delivery, and capability tokens for constrained devices.
 
 import {
   ApiError,

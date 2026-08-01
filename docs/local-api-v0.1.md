@@ -1,5 +1,15 @@
 # Arete Gateway — Local Service API, Design Proposal v0.1
 
+> ⚠️ **HISTORICAL — this is the original proposal, kept for reference.** The
+> gateway is built and several claims here are now wrong. Read
+> [../README.md](../README.md) for what the API actually does; its
+> "Divergences" section lists every difference and, separately, the things
+> this document is now WRONG about. In particular §4.4's retraction, the
+> event catalogue and the webhook surface all exist and behave as described
+> there, not here. Placement, naming and browser-client constraints — absent
+> from this document entirely — are in
+> [placement-naming-draft.md](placement-naming-draft.md).
+
 > **Purpose.** The Arete Gateway is a general-purpose component that lets existing applications participate in CNS/CP realms without embedding the SDK. It has two faces: realm-side it is a full CNS/CP participant (built on the Arete SDK); system-side it exposes **this local REST API**, which any application (ONUMA System, Semantic Bridge, any System X app) consumes to declare capabilities, observe governed connections, exchange properties, and receive event callbacks.
 >
 > Design goals: **small surface, stable contract, idempotent by construction, event-faithful.** An application should be able to participate meaningfully with four calls and one webhook.

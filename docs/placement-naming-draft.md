@@ -1,7 +1,15 @@
-# Draft: §6 for arete_gateway_local_api — Placement, naming, and browser clients
+# Placement, naming, and browser clients
 
-> Slots in after §5 (walkthrough); current §6 "Design notes & open questions" becomes §7.
-> Bump doc to v0.2. Design-note 5 (security posture) gets one amendment, noted at the end.
+> **Status: current, and the main open work on the gateway.** Drafted as a new
+> §6 for the local API doc (pushing "Design notes & open questions" to §7) and
+> still unmerged there, because the v0.1 document has been overtaken more
+> broadly — see the notice at the top of `local-api-v0.1.md`.
+>
+> Nothing here is implemented yet beyond the CORS allowlist and the SSE
+> `?token=` path. §6.4's conclusion — that per-app tokens are *required* the
+> moment the gateway binds beyond loopback — is the reason this matters: the
+> capability tokens now in the gateway are the right shape for it, so the
+> remaining work is smaller than when this was written.
 
 ---
 

@@ -43,6 +43,10 @@ curl -N -H "$H" "$B/events?stream=sse&realm=test"     # connection.created, prop
 Connections then *appear* — they are never created by the app. Write back with
 `PUT …/declarations/consumer/padi.light/properties/cState -d '{"value":"1"}'`.
 
+To leave, retract: `DELETE` the declaration, context or node. The substrate
+severs any connections that depended on it — connections are no more deleted
+by the app than they were created by it.
+
 ## Console
 
 The gateway serves its own live view at **http://localhost:8420/ui** — a
@@ -59,6 +63,9 @@ that, the remote gateway must allowlist the page's origin in `corsOrigins`
 (config.json; default empty = no cross-origin browser access). The SSE stream
 accepts `?token=` because EventSource cannot set an Authorization header —
 see docs/placement-naming-draft.md for the placement/browser-client story.
+
+It has not kept pace with the API: webhooks and capabilities are not shown, so
+those two surfaces are currently curl-only. Next job on the console.
 
 ## Field-truth behaviors baked in
 
@@ -100,45 +107,112 @@ These come from live-verified SDK/realm behavior (see ARETE.md gotchas):
 
 Each is deliberate; carry into the v0.2 doc revision.
 
-1. **`DELETE …/declarations/{role}/{profile}` returns 501.** Retraction is not
-   implementable today: SDK v0.1.6 has no delete command, the CNS wire has no
-   key delete (`put key null` writes a literal `"null"` and can create parent
-   keys), and the spec lists DELETE as an open TODO. This is the concrete
-   forcing function for wire-level delete (raise with realm-side owners).
-   Consequence: §4.4's only exit path ("retract the declaration; the substrate
-   severs") does not exist yet either.
-2. **Declaration-level property writes require the `propagate` flag.** §4.3
+1. **Declaration-level property writes require the `propagate` flag.** §4.3
    says declaration-level writes "fan out to all bound connections" — on the
    wire that is only true for propagate-flagged properties. Writing a
    non-propagated property at capability level returns 422 `not_propagated`
    pointing at the per-connection (addressed) endpoint. Writing the peer
    role's property returns 422 `wrong_role_property`.
-3. **No `connection.deleted` event.** Connection lifecycle is a spec TODO,
-   status is absent from the wire, and without delete there is no retraction
-   to observe. Rather than emit an event we cannot back with wire truth, v0
-   omits it. `connection.updated` is likewise omitted (property changes are
-   already first-class events).
-4. **Webhooks are phase 2; SSE is the v0 event surface.** Same envelopes,
-   `Last-Event-ID` resume against a 10k in-memory ring buffer. Event IDs carry
-   a boot epoch, so a resume from a previous gateway process is detected (full
-   buffer replay) instead of silently gapping. `POST /webhooks/{hook}/test`
-   would also break the doc's own "no POST" claim (design note 1) — worth
-   fixing in the doc when webhooks land.
-5. **Profiles are validated against the registry at declaration time**
+2. **Profiles are validated against the registry at declaration time**
    (422 `unknown_profile`) — stricter than the doc, which validates nothing.
    Turns the "silent no-bind" failure mode into an immediate, explainable
    error.
-6. **`DELETE /realms/{realm}` is local detach only** — the realm-side
-   registrations remain (no wire delete). The response says so.
-7. **Offline behavior:** node/context/declaration PUTs while the realm is
+3. **`DELETE /realms/{realm}` is local detach only.** Detaching a realm stops
+   this gateway talking to it; it does not retract what was declared there.
+   Retract the nodes first if that is what you meant.
+4. **Offline behavior:** node/context/declaration PUTs while the realm is
    unreachable are persisted and answered `202` (`state: "pending"`), replayed
    on reconnect — per the doc's declarations-only queueing rule. Property
    writes while offline fail `503 realm_unreachable`.
-8. **Peer identification is best-effort.** The wire does not (observedly)
-   label a connection with its peer; `connection.created` carries a peer
-   derived from complementary-role participants in the same context. With >2
-   participants this can be ambiguous — connection-lifecycle spec work is the
-   real fix.
+5. **`connection.updated` is not emitted.** Property changes are already
+   first-class events, so it would carry nothing the consumer does not have.
+6. **`POST` exists after all.** Design note 1 claims no operation needs POST.
+   Two do, and both are creations the server names:
+   `POST …/connections/{conn}/capabilities` (the token is generated, so the
+   client cannot choose its id) and `POST /webhooks/{hook}/test` (an action,
+   not a resource). The idempotency-first rule holds everywhere else.
+
+### Resolved since v0.1 — the doc is now WRONG about these
+
+Listed separately because the v0.1 doc and earlier revisions of this README
+describe behaviour that no longer exists. Anyone reading them will be misled.
+
+* **Retraction works.** `DELETE` on a declaration, context or node retracts
+  that subtree. The earlier "returns 501, the wire has no delete" was wrong
+  about the wire: `del` and `purge` were reachable all along — the CLI behind
+  the realm dispatches them — and the orchestrator severs the peer's side
+  correctly. Nothing needed adding to the realm. What was missing was anything
+  that asked. (`put key null` really does write a literal `"null"`; that part
+  was right, and is why it looked impossible.)
+* **`connection.deleted` is emitted.** Removal became observable the moment
+  retraction existed: the connection's keys disappear and the gateway emits
+  once, when the last one goes.
+* **Webhooks are implemented** — see below. SSE remains available and carries
+  identical envelopes.
+* **The peer is identified, not inferred.** The wire *does* label a connection
+  with its far end: alongside the properties it writes an attribute named for
+  the opposite role, holding `cns/<system>/nodes/<node>/contexts/<ctx>`. The
+  old complementary-role heuristic was a guess, and with more than two
+  participants in a context usually the wrong one. It survives only as a last
+  resort, refuses to answer when ambiguous, and flags itself `inferred: true`.
+
+## Webhooks
+
+Same envelopes SSE carries, pushed to your endpoint.
+
+```bash
+curl -X PUT -H "$H" $B/webhooks/my-hook -d '{
+  "url": "http://127.0.0.1:9000/arete",
+  "secret": "whsec_…",
+  "events": ["connection.created","property.changed","connection.deleted"]
+}'
+curl -X POST -H "$H" $B/webhooks/my-hook/test     # synthetic event, end to end
+```
+
+* **At-least-once** — a failed delivery is retried; dedupe on `eventId`.
+  Losing a `connection.created` silently is worse than seeing it twice.
+* **Ordered per hook** — one delivery in flight, and a failure retries the
+  *same* event before anything behind it.
+* **Signed** — `X-Arete-Signature: sha256=…`, HMAC over the exact bytes sent.
+* **Bounded** — capped queue per hook (oldest dropped, counted), give up after
+  24h, so a dead endpoint cannot grow memory forever.
+
+The secret is stored but never echoed (`hasSecret` only). Unknown event types
+are refused at registration rather than silently never matching. `POST /test`
+deliberately ignores the hook's filter — it is a connectivity check.
+
+Not implemented deliberately: replay of events from while the gateway was
+down. The realm is the source of truth and state is re-derived on reconnect;
+replaying a stale log would make confident claims about a present that has
+moved on.
+
+## Capabilities (constrained devices)
+
+A device that cannot run the CNS/CP stack still needs to touch one property on
+one connection. Give it a capability rather than the gateway's API token.
+
+```bash
+curl -X POST -H "$H" $B/realms/test/nodes/my-light/contexts/lobby1\
+/declarations/consumer/padi.light/connections/$CONN/capabilities \
+  -d '{"properties":["cState"],"direction":"write","label":"wall switch"}'
+```
+
+The device then uses the **same** property endpoints an app uses — only the
+credential differs, so there is no second data plane.
+
+* **Attenuating** — may only name properties the gateway itself may write on
+  this side, checked at mint against the CP's flags. You cannot delegate what
+  you do not hold.
+* **Narrow** — cannot read the declaration tree, `/status`, `/events` or
+  `/webhooks`, cannot mint further capabilities, cannot retract. The request
+  path is matched *against* the capability, so unconsidered routes fail closed.
+* **Hashed** — only the SHA-256 is stored; the token is returned once and
+  cannot be recovered.
+* **Self-expiring** — the binding must still exist at use time. When the
+  substrate severs, the capability refers to nothing (`410`). Revocation for
+  free.
+* **Directional** — `read` / `write` / `readwrite`, and a reader sees only the
+  properties it names, not the merged view an app gets.
 
 ## API summary
 
@@ -152,23 +226,39 @@ Everything under `/v0`, JSON bodies, errors as
 | GET | `/realms` | all realms |
 | PUT/GET | `/realms/{r}/nodes/{node}` | `{name, upstream}` / introspect subtree |
 | PUT/GET | `…/contexts/{ctx}` | `{name}` |
-| PUT/GET/DELETE | `…/declarations/{role}/{profile}` | 201/200/409; DELETE → 501 |
+| DELETE | `/realms/{r}/nodes/{node}`, `…/contexts/{ctx}` | retract that subtree |
+| PUT/GET/DELETE | `…/declarations/{role}/{profile}` | 201/200/409; DELETE retracts |
 | GET/PUT | `…/declarations/…/properties[/{prop}]` | capability level; PUT needs `propagate` |
 | GET | `…/declarations/…/connections[/{conn}]` | read-only; appear via Match/Bind |
 | GET/PUT | `…/connections/{conn}/properties[/{prop}]` | merged view / addressed write |
+| POST/GET | `…/connections/{conn}/capabilities` | mint a device token / list |
+| DELETE | `…/connections/{conn}/capabilities/{capId}` | revoke |
+| PUT/GET/DELETE | `/webhooks/{hook}` | register / describe / remove |
+| POST | `/webhooks/{hook}/test` | fire a synthetic event end to end |
 | GET | `/realms/{r}/systems`, `…/contexts`, `…/contexts/{ctx}/participants` | live-state introspection |
 | GET | `/events` | JSON recent, or `?stream=sse` (+ `realm`/`node`/`context`/`role`/`profile`/`type` filters) |
+
+Event types: `connection.created`, `connection.deleted`, `property.changed`,
+`realm.connected`, `realm.disconnected` (and `webhook.test`).
 
 ## Testing
 
 ```bash
-npm run test:e2e        # live E2E against test.aretehosting.com (E2E_REALM=… to override)
+npm run test:e2e           # the §5 walkthrough, bind, events, write-back, retraction
+npm run test:webhooks      # delivery, HMAC, retry, filters
+npm run test:capabilities  # device tokens — mostly what they CANNOT do
+npm run test:peers         # three providers in one context: is the peer right?
 ```
 
-Spawns the gateway plus an independent SDK peer (the "switch"), runs the §5
-walkthrough plus the corrected-behavior negative cases, and asserts the full
-bind → events → write-back → merged-view loop. Leaves small e2e systems on the
-realm (no wire delete).
+All four spawn the gateway plus independent SDK peers and run against a real
+realm — `test.aretehosting.com` by default, or set `E2E_REALM`,
+`E2E_PROTOCOL` and `E2E_PORT` to point at a local one (etcd + cns-cli +
+orchestrator), which is faster and touches nothing shared.
+
+Each suite retracts what it declared, so a run leaves no matchable
+declarations behind. That is recent: every run used to leave a permanent
+participant, which is how the test realm accumulated 38 systems, 35 of them
+dead.
 
 ## Security posture (v0)
 
@@ -177,5 +267,11 @@ live in gateway config only and are never echoed by any endpoint; binds to
 127.0.0.1 unless configured otherwise. Realm tokens in `config.json` /
 `data/state.json` are stored in plaintext — acceptable for a local dev
 gateway, revisit (keychain/secret store) before anything multi-user.
-Per-app tokens with per-node scoping: deliberately deferred, per design doc
-open question 5.
+
+**Capabilities** are the exception to "one token for everything": a device
+gets a credential scoped to one connection and named properties, stored as a
+hash. That is also the shape per-app tokens should take when the gateway binds
+beyond loopback — which the placement notes say is required, not optional, and
+remains the main open item here. See
+[docs/placement-naming-draft.md](docs/placement-naming-draft.md) for placement,
+mDNS naming, TLS and browser-client constraints.
