@@ -27,12 +27,19 @@ const EVENT_TYPES = [
   'webhook.test',
 ];
 
-export function createApi({ cfg, store, manager, hub, registry, webhooks }) {
-  return async function handle(req, res, url) {
+export function createApi({ cfg, store, manager, hub, registry, webhooks, capabilities }) {
+  return async function handle(req, res, url, auth = { kind: 'local' }) {
     const segs = url.pathname.split('/').filter(Boolean); // ['v0', ...]
     if (segs[0] !== 'v0') throw notFound(`unknown path ${url.pathname} (API lives under /v0)`);
     segs.shift();
     const method = req.method;
+
+    // A capability token is not a weaker local token — it authorises exactly
+    // one property operation on one connection. Handle it on its own path and
+    // never fall through into the general API.
+    if (auth.kind === 'capability') {
+      return handleCapabilityRequest({ req, res, url, segs, method, cap: auth.cap });
+    }
 
     // ---- /v0/status ----
     if (segs[0] === 'status' && segs.length === 1 && method === 'GET') {
@@ -159,6 +166,72 @@ export function createApi({ cfg, store, manager, hub, registry, webhooks }) {
 
     throw notFound(`no route for ${method} ${url.pathname}`);
   };
+
+  /**
+   * The device path. A capability names one connection and a set of properties
+   * on it, so exactly two things are permitted:
+   *
+   *   GET  …/connections/{conn}/properties            read the merged view
+   *   PUT  …/connections/{conn}/properties/{prop}     write a named property
+   *
+   * Anything else — another connection, another property, the declaration
+   * tree, events, webhooks, minting further capabilities — is refused. The
+   * path is matched against the capability rather than the capability being
+   * checked against the path, so a route we forget to think about fails
+   * closed.
+   */
+  async function handleCapabilityRequest({ req, res, url, segs, method, cap }) {
+    const deny = (msg) => new ApiError(403, 'capability_scope', msg);
+
+    // Expected shape: realms/{r}/nodes/{n}/contexts/{c}/declarations/{role}/{profile}/connections/{conn}/properties[/{prop}]
+    if (segs[0] !== 'realms' || segs[2] !== 'nodes' || segs[4] !== 'contexts' ||
+      segs[6] !== 'declarations' || segs[9] !== 'connections' || segs[11] !== 'properties')
+      throw deny('this credential may only read or write properties on its own connection');
+
+    const scope = {
+      realm: segs[1], node: segs[3], context: segs[5],
+      role: segs[7], profile: segs[8], conn: segs[10],
+    };
+    const property = segs[12];
+    const write = method === 'PUT';
+
+    if (method !== 'GET' && method !== 'PUT') throw methodNotAllowed(method);
+    if (write && property === undefined) throw badRequest('a property name is required');
+
+    if (!capabilities.permits(cap, { ...scope, property, write }))
+      throw deny(
+        `this credential authorises ${cap.direction} on ${cap.properties.join(', ')} ` +
+        `of connection ${cap.conn} only`);
+
+    const realm = manager.get(scope.realm);
+    realm.requireClient();
+
+    // The binding must still exist. When the substrate severs, a capability
+    // refers to nothing — which is what makes revocation free.
+    const conn = realm.connection(scope.node, scope.context, scope.role, scope.profile, scope.conn);
+    if (!conn) throw new ApiError(410, 'connection_gone',
+      'the connection this credential refers to no longer exists');
+
+    capabilities.touch(cap.capId);
+
+    if (!write) {
+      // Only the properties this capability names — not the merged view.
+      const visible = {};
+      for (const p of cap.properties) if (p in conn.properties) visible[p] = conn.properties[p];
+      return sendJson(res, 200, visible);
+    }
+
+    const body = await readBody(req);
+    // Same CP checks an app gets: a capability can never exceed what the
+    // gateway itself may write on this side of the binding.
+    await checkPropertyWrite(registry, scope.profile, scope.role, property, { requirePropagate: false });
+    await realm.putConnectionProperty(
+      scope.node, scope.context, scope.role, scope.profile, scope.conn, property, body.value ?? '');
+
+    return sendJson(res, 200, {
+      property, value: String(body.value ?? ''), scope: 'connection', conn: scope.conn, via: 'capability',
+    });
+  }
 
   async function handleNodes({ req, res, method, segs, realmName, realm, store, registry }) {
     const nodeId = validateId(segs[3], 'node');
@@ -312,6 +385,50 @@ export function createApi({ cfg, store, manager, hub, registry, webhooks }) {
       if (segs.length === 11 && method === 'GET') {
         return sendJson(res, 200, conn);
       }
+
+      // ---- capabilities on this connection (the device-token surface) ----
+      if (segs[11] === 'capabilities') {
+        const scope = { realm: realmName, node: nodeId, context: ctxId, role, profile, conn: connId };
+
+        if (segs.length === 12 && method === 'POST') {
+          const body = await readBody(req);
+          const props = body.properties;
+          if (!Array.isArray(props) || props.length === 0)
+            throw badRequest('capability requires a non-empty "properties" array');
+
+          // Attenuation: a capability may only name properties the gateway is
+          // itself permitted to write on this side of the binding. Checked at
+          // MINT time so an impossible capability cannot be created at all.
+          const wantsWrite = (body.direction ?? 'write') !== 'read';
+          if (wantsWrite) {
+            for (const p of props) {
+              await checkPropertyWrite(registry, profile, role, p, { requirePropagate: false });
+            }
+          }
+
+          const { token, record } = capabilities.mint(scope, body);
+          return sendJson(res, 201, {
+            ...record,
+            token,
+            note: 'the token is shown ONCE and cannot be recovered — only its hash is stored',
+          });
+        }
+
+        if (segs.length === 12 && method === 'GET') {
+          return sendJson(res, 200, capabilities.list(scope));
+        }
+
+        if (segs.length === 13 && method === 'DELETE') {
+          const capId = validateId(segs[12], 'capability');
+          const rec = capabilities.get(capId);
+          if (!rec || rec.conn !== connId) throw notFound(`no capability '${capId}' on this connection`);
+          capabilities.revoke(capId);
+          return sendJson(res, 200, { capId, revoked: true });
+        }
+
+        throw methodNotAllowed(method);
+      }
+
       if (segs[11] === 'properties') {
         if (segs.length === 12 && method === 'GET') {
           return sendJson(res, 200, conn.properties); // merged view: both sides' current values

@@ -12,6 +12,7 @@ import { EventHub } from './events.js';
 import { RealmManager } from './realm-manager.js';
 import { createApi } from './api.js';
 import { WebhookManager } from './webhooks.js';
+import { CapabilityManager } from './capabilities.js';
 import { sendError, ApiError } from './util.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -21,13 +22,14 @@ const store = new Store(cfg.dataDir);
 const registry = new Registry(cfg.dataDir);
 const hub = new EventHub();
 const manager = new RealmManager({ store, hub, registry, systemName: cfg.systemName });
+const capabilities = new CapabilityManager({ store });
 const webhooks = new WebhookManager({
   store,
   hub,
   log: (level, message) => console.log(`[webhooks:${level}] ${message}`),
 });
 
-const api = createApi({ cfg, store, manager, hub, registry, webhooks });
+const api = createApi({ cfg, store, manager, hub, registry, webhooks, capabilities });
 
 const uiFile = path.join(root, 'ui', 'index.html');
 
@@ -48,8 +50,8 @@ const server = http.createServer(async (req, res) => {
       return res.end(html);
     }
 
-    authenticate(req, url);
-    await api(req, res, url);
+    const auth = authenticate(req, url);
+    await api(req, res, url, auth);
   } catch (err) {
     if (!(err instanceof ApiError) && !err.status) console.error('[gateway] error:', err);
     if (!res.headersSent) sendError(res, err);
@@ -78,14 +80,27 @@ function applyCors(req, res) {
   return false;
 }
 
+// Returns the authorisation context for this request. Two kinds of credential:
+//
+//   local       the gateway's API token — full access, what apps use.
+//   capability  a device token naming ONE connection and a fixed set of
+//               properties on it. Everything else is refused (see api.js).
+//
+// A capability is deliberately not a weaker local token: it is a different
+// kind of thing, and the API treats it as such.
 function authenticate(req, url) {
   const header = req.headers.authorization ?? '';
   const bearer = header.startsWith('Bearer ') ? header.slice(7) : null;
   // ?token= accepted for SSE only (EventSource cannot set headers).
   const query = url.pathname === '/v0/events' ? url.searchParams.get('token') : null;
-  if ((bearer ?? query) !== cfg.localToken) {
-    throw new ApiError(401, 'unauthorized', 'missing or invalid local API token');
-  }
+  const presented = bearer ?? query;
+
+  if (presented === cfg.localToken) return { kind: 'local' };
+
+  const cap = capabilities.resolve(presented);
+  if (cap) return { kind: 'capability', cap };
+
+  throw new ApiError(401, 'unauthorized', 'missing or invalid local API token');
 }
 
 server.listen(cfg.port, cfg.bind, () => {

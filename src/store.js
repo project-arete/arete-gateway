@@ -8,7 +8,7 @@ import path from 'node:path';
 export class Store {
   constructor(dataDir) {
     this.file = path.join(dataDir, 'state.json');
-    this.state = { realms: {}, tree: {}, webhooks: {} };
+    this.state = { realms: {}, tree: {}, webhooks: {}, capabilities: {} };
     if (fs.existsSync(this.file)) {
       try {
         this.state = JSON.parse(fs.readFileSync(this.file, 'utf8'));
@@ -19,6 +19,7 @@ export class Store {
     this.state.realms = this.state.realms ?? {};
     this.state.tree = this.state.tree ?? {};
     this.state.webhooks = this.state.webhooks ?? {};
+    this.state.capabilities = this.state.capabilities ?? {};
   }
 
   save() {
@@ -60,6 +61,26 @@ export class Store {
   deleteWebhook(hook) {
     const existed = this.state.webhooks[hook] !== undefined;
     delete this.state.webhooks[hook];
+    this.save();
+    return existed;
+  }
+
+  // ----- capabilities (device tokens; only the HASH is stored, so a leak of
+  // this file is not a leak of credentials) -----
+
+  getCapabilities() {
+    return this.state.capabilities;
+  }
+
+  putCapability(capId, record) {
+    this.state.capabilities[capId] = record;
+    this.save();
+    return record;
+  }
+
+  deleteCapability(capId) {
+    const existed = this.state.capabilities[capId] !== undefined;
+    delete this.state.capabilities[capId];
     this.save();
     return existed;
   }
