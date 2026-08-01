@@ -1,7 +1,7 @@
 {
   "name": "arete-gateway",
   "version": "0.1.0",
-  "description": "Arete Gateway — local REST/SSE face for CNS/CP realm participation without embedding the SDK",
+  "description": "Arete Gateway \u2014 local REST/SSE face for CNS/CP realm participation without embedding the SDK",
   "type": "module",
   "main": "src/server.js",
   "scripts": {
@@ -19,5 +19,8 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "jsdom": "^24.0.0"
   }
 }
