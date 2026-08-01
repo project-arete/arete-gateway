@@ -3,3 +3,9 @@ data/
 config.json
 *.log
 .DS_Store
+
+# e2e scratch: the suite creates an isolated gateway root + data dir per run.
+# One of these was committed by accident (0d4f03d) and shipped in the repo.
+root-e2e-*/
+data-e2e-*/
+*.tmp.mjs
