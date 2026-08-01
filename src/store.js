@@ -8,7 +8,7 @@ import path from 'node:path';
 export class Store {
   constructor(dataDir) {
     this.file = path.join(dataDir, 'state.json');
-    this.state = { realms: {}, tree: {} };
+    this.state = { realms: {}, tree: {}, webhooks: {} };
     if (fs.existsSync(this.file)) {
       try {
         this.state = JSON.parse(fs.readFileSync(this.file, 'utf8'));
@@ -18,6 +18,7 @@ export class Store {
     }
     this.state.realms = this.state.realms ?? {};
     this.state.tree = this.state.tree ?? {};
+    this.state.webhooks = this.state.webhooks ?? {};
   }
 
   save() {
@@ -41,6 +42,26 @@ export class Store {
     delete this.state.realms[name];
     delete this.state.tree[name];
     this.save();
+  }
+
+  // ----- webhooks (registrations survive restart; the secret is stored but
+  // never echoed back over the API) -----
+
+  getWebhooks() {
+    return this.state.webhooks;
+  }
+
+  putWebhook(hook, record) {
+    this.state.webhooks[hook] = record;
+    this.save();
+    return record;
+  }
+
+  deleteWebhook(hook) {
+    const existed = this.state.webhooks[hook] !== undefined;
+    delete this.state.webhooks[hook];
+    this.save();
+    return existed;
   }
 
   // ----- declaration tree -----

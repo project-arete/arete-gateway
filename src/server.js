@@ -11,6 +11,7 @@ import { Registry } from './registry.js';
 import { EventHub } from './events.js';
 import { RealmManager } from './realm-manager.js';
 import { createApi } from './api.js';
+import { WebhookManager } from './webhooks.js';
 import { sendError, ApiError } from './util.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -20,8 +21,13 @@ const store = new Store(cfg.dataDir);
 const registry = new Registry(cfg.dataDir);
 const hub = new EventHub();
 const manager = new RealmManager({ store, hub, registry, systemName: cfg.systemName });
+const webhooks = new WebhookManager({
+  store,
+  hub,
+  log: (level, message) => console.log(`[webhooks:${level}] ${message}`),
+});
 
-const api = createApi({ cfg, store, manager, hub, registry });
+const api = createApi({ cfg, store, manager, hub, registry, webhooks });
 
 const uiFile = path.join(root, 'ui', 'index.html');
 
@@ -91,6 +97,7 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
     console.log(`[gateway] ${sig} — shutting down`);
     manager.stopAll();
+    webhooks.stop();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 2000).unref();
   });

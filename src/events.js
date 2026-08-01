@@ -10,6 +10,17 @@ export class EventHub {
   #seq = 0;
   #boot = Date.now().toString(36);
   #subs = new Set(); // { res, filter }
+  #listeners = new Set(); // programmatic consumers (webhook delivery)
+
+  /**
+   * Register an in-process consumer of every event. Used by webhook delivery,
+   * which needs the same envelopes SSE gets but has to queue and retry them.
+   * Returns an unsubscribe function.
+   */
+  onEvent(fn) {
+    this.#listeners.add(fn);
+    return () => this.#listeners.delete(fn);
+  }
 
   emit(type, fields) {
     const evt = {
@@ -22,6 +33,14 @@ export class EventHub {
     if (this.#buf.length > MAX_EVENTS) this.#buf.shift();
     for (const sub of this.#subs) {
       if (matches(evt, sub.filter)) writeSse(sub.res, evt);
+    }
+    // Listeners must never break event emission for everyone else.
+    for (const fn of this.#listeners) {
+      try {
+        fn(evt);
+      } catch {
+        /* a broken consumer is its own problem */
+      }
     }
     return evt;
   }
@@ -79,6 +98,12 @@ function writeSse(res, evt) {
   } catch {
     /* subscriber going away; close handler cleans up */
   }
+}
+
+// Exported so webhook delivery applies exactly the same filter semantics as
+// SSE — one definition, so the two paths cannot drift.
+export function eventMatches(evt, filter) {
+  return matches(evt, filter);
 }
 
 function matches(evt, filter) {

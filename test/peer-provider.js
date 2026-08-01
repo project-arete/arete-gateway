@@ -45,6 +45,25 @@ if (client.get(`${prefix}/version`) === null) {
 await client.put(`${prefix}/properties/sLabel`, 'E2E Switch');
 console.log('PEER READY');
 
+// Arm the teardown listener NOW, not after the scenario completes: a driver
+// that never drives this peer all the way to the end still needs to be able to
+// tell it to clean up, or every run leaves a permanent participant behind.
+let retracting = false;
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', async (chunk) => {
+  if (retracting || !String(chunk).includes('RETRACT')) return;
+  retracting = true;
+  try {
+    await client.command('purge', `cns/${system.id}/nodes/${NODE_ID}`);
+    console.log('PEER RETRACTED');
+  } catch (e) {
+    console.log('PEER RETRACT FAILED: ' + e.message);
+  }
+  client.dispose();
+  process.exit(0);
+});
+process.stdin.resume();
+
 // Wait for the broker to bind us.
 const connRe = new RegExp(`^${prefix.replace(/[.]/g, '\\.')}/connections/([^/]+)/`);
 let connId = null;
@@ -74,29 +93,16 @@ const seeStart = Date.now();
 while (Date.now() - seeStart < 30000) {
   if (client.get(cKey) === '1') {
     console.log('PEER SAW cState=1');
-
-    // Stay bound so the driver can inspect the live connection, then retract
-    // on request so test runs stop leaving permanent participants behind.
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', async (chunk) => {
-      if (!String(chunk).includes('RETRACT')) return;
-      try {
-        await client.command('purge', `cns/${system.id}/nodes/${NODE_ID}`);
-        console.log('PEER RETRACTED');
-      } catch (e) {
-        console.log('PEER RETRACT FAILED: ' + e.message);
-      }
-      client.dispose();
-      process.exit(0);
-    });
-    process.stdin.resume();
+    // Stay bound so the driver can inspect the live connection; the RETRACT
+    // listener armed above handles teardown whenever it is asked for.
     break;
   }
   await new Promise((r) => setTimeout(r, 300));
 }
-// Reached only if the loop ran out without ever seeing cState (the success
-// path breaks out and waits on stdin for RETRACT).
+// Reached if the loop ran out without ever seeing cState. Do NOT exit: some
+// drivers (the webhook suite) never write cState back, and exiting here would
+// escape teardown and leave a permanent participant on the realm. Stay alive
+// for RETRACT; the driver kills us if it does not want us.
 if (client.get(cKey) !== '1') {
-  console.log('PEER TIMEOUT waiting for cState');
-  process.exit(1);
+  console.log('PEER TIMEOUT waiting for cState (still available for RETRACT)');
 }

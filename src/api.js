@@ -15,7 +15,19 @@ import {
 } from './util.js';
 import { writerRole } from './registry.js';
 
-export function createApi({ cfg, store, manager, hub, registry }) {
+// The complete event catalogue. connection.updated from the v0.1 doc is
+// deliberately absent — it is not observable on the wire. connection.deleted
+// IS, now that retraction exists.
+const EVENT_TYPES = [
+  'connection.created',
+  'connection.deleted',
+  'property.changed',
+  'realm.connected',
+  'realm.disconnected',
+  'webhook.test',
+];
+
+export function createApi({ cfg, store, manager, hub, registry, webhooks }) {
   return async function handle(req, res, url) {
     const segs = url.pathname.split('/').filter(Boolean); // ['v0', ...]
     if (segs[0] !== 'v0') throw notFound(`unknown path ${url.pathname} (API lives under /v0)`);
@@ -42,13 +54,51 @@ export function createApi({ cfg, store, manager, hub, registry }) {
       return sendJson(res, 200, { events: hub.recent(filter, limit) });
     }
 
-    // ---- /v0/webhooks — phase 2 ----
+    // ---- /v0/webhooks ----
     if (segs[0] === 'webhooks') {
-      throw new ApiError(
-        501,
-        'not_implemented',
-        'webhook delivery is phase 2 — use GET /v0/events?stream=sse (same envelopes, Last-Event-ID resume)',
-      );
+      if (segs.length === 1 && method === 'GET') {
+        return sendJson(res, 200, webhooks.list());
+      }
+
+      const hookId = validateId(segs[1], 'webhook');
+
+      if (segs.length === 2) {
+        if (method === 'PUT') {
+          const body = await readBody(req);
+          if (typeof body.url !== 'string' || !/^https?:\/\//i.test(body.url))
+            throw badRequest('webhook body requires an http(s) "url"');
+          if (body.events !== undefined && !Array.isArray(body.events))
+            throw badRequest('"events" must be an array of event types');
+          if (Array.isArray(body.events)) {
+            const unknown = body.events.filter((e) => !EVENT_TYPES.includes(e));
+            if (unknown.length)
+              throw new ApiError(422, 'unknown_event_type',
+                `unknown event type(s): ${unknown.join(', ')} — known: ${EVENT_TYPES.join(', ')}`);
+          }
+          return sendJson(res, 200, webhooks.put(hookId, body));
+        }
+        if (method === 'GET') {
+          const hook = webhooks.get(hookId);
+          if (!hook) throw notFound(`no webhook '${hookId}'`);
+          return sendJson(res, 200, hook);
+        }
+        if (method === 'DELETE') {
+          if (!webhooks.delete(hookId)) throw notFound(`no webhook '${hookId}'`);
+          return sendJson(res, 200, { hook: hookId, deleted: true });
+        }
+        throw methodNotAllowed(method);
+      }
+
+      if (segs[2] === 'test' && segs.length === 3 && method === 'POST') {
+        if (!webhooks.test(hookId)) throw notFound(`no webhook '${hookId}'`);
+        return sendJson(res, 202, {
+          hook: hookId,
+          queued: true,
+          note: 'a synthetic webhook.test event has been queued for delivery',
+        });
+      }
+
+      throw notFound(`no route for ${method} ${url.pathname}`);
     }
 
     // ---- /v0/realms ----
