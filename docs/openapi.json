@@ -11,8 +11,12 @@
   },
   "servers": [
     {
+      "url": "/",
+      "description": "This gateway — same origin as the page serving the spec (always correct)"
+    },
+    {
       "url": "http://localhost:8420",
-      "description": "Local gateway (port configurable; localhost scope in v0.1)"
+      "description": "Default local gateway address (for external spec viewers)"
     }
   ],
   "security": [
